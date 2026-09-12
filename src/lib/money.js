@@ -121,3 +121,11 @@ export function splitReceipt({ people = [], items = [], assignments = [], taxAmo
     grandCents: assignedCents + allocatedTaxCents + allocatedTipCents
   };
 }
+
+// Cut one amount into n equal-as-possible pieces, exact to the cent. A receipt
+// line reading "3 @ 12.41" becomes three rows that still sum to 12.41, which
+// dividing the float would not: 12.41/3 rounds to 4.14 three times, or 12.42.
+export function splitEvenCents(amountCents, n) {
+  if (!Number.isFinite(n) || n <= 0) return [];
+  return splitProportionally(amountCents, new Array(n).fill(1));
+}

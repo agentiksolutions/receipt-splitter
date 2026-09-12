@@ -3,7 +3,7 @@
 // It fails loudly if the cent reconciliation breaks.
 
 import assert from 'node:assert/strict';
-import { splitReceipt, toCents, money } from './money.js';
+import { splitReceipt, toCents, money, splitEvenCents } from './money.js';
 
 let checks = 0;
 function check(label, fn) {
@@ -217,6 +217,24 @@ check('every 1-cent tax split across 2 to 9 people reconciles', () => {
       tipAmount: 0.02
     });
     reconciles(r, `crowd of ${n}`);
+  }
+});
+
+check('a quantity line splits into rows that sum back to the line total', () => {
+  // The reader reports the LINE total on a quantity line, so "3 @ 12.41"
+  // arrives as 12.41 with qty 3. Dividing the float and rounding each row
+  // would give 4.14 three times, which is 12.42.
+  assert.deepEqual(splitEvenCents(1241, 3), [414, 414, 413]);
+  assert.deepEqual(splitEvenCents(1000, 1), [1000]);
+  assert.deepEqual(splitEvenCents(0, 4), [0, 0, 0, 0]);
+  assert.deepEqual(splitEvenCents(500, 0), []);
+  // Every line total up to $2, over every quantity up to 9, still closes.
+  for (let cents = 1; cents <= 200; cents++) {
+    for (let qty = 1; qty <= 9; qty++) {
+      const rows = splitEvenCents(cents, qty);
+      assert.equal(rows.length, qty);
+      assert.equal(rows.reduce((s, c) => s + c, 0), cents, `${cents} cents over ${qty}`);
+    }
   }
 });
 

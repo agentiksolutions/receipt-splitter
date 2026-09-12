@@ -1,36 +1,54 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { remember } from '../lib/history.js';
-import { splitReceipt, money, toCents, fromCents } from '../lib/money.js';
-import PersonCard from './PersonCard.jsx';
-import Qr from './Qr.jsx';
+import { splitReceipt, money } from '../lib/money.js';
+import { IconShare, Progress, Wordmark } from './ui.jsx';
+import PeopleStep from './PeopleStep.jsx';
+import ItemsStep from './ItemsStep.jsx';
+import AssignStep from './AssignStep.jsx';
+import SettleStep from './SettleStep.jsx';
 
-const SAMPLE_ITEMS = [
-  ['Bubly 12z 8pk', 3.97], ['Bubly 12z 8pk', 3.97], ['Applewood bacon', 9.12],
-  ['Bell peppers', 2.97], ['Potatoes', 4.08], ['Boneless chops', 12.41],
-  ['Mushrooms', 2.32], ['GV 24pk water', 3.68], ['Spread butter 4.4z', 3.47],
-  ['Siete tortillas', 4.84], ['Glass cleaner', 3.48], ['Oikos yogurt', 4.97],
-  ['Gum and mints', 4.82], ['GV mountain trail mix', 6.52], ['Orig 10oz', 5.66],
-  ['Alani Nu WTC brew', 2.67], ['Alani Nu WTC brew', 2.67], ['Alani Nu WTC brew', 2.67],
-  ['Alani Nu WTC brew', 2.67], ['Hefty freezer bags', 5.97], ['Raspberries', 2.77],
-  ['Organic bananas', 1.49], ['Kodiak Cakes butter', 4.96], ["Snyder's honey pretzels", 3.87],
-  ['Wonderful pistachios', 11.94]
+// Which splits this device has already walked through the stepper. Reopening
+// one lands on Settle instead of restarting the wizard.
+const DONE_KEY = 'rs.done';
+
+function doneIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DONE_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function markDone(id) {
+  try {
+    localStorage.setItem(DONE_KEY, JSON.stringify([id, ...doneIds().filter((x) => x !== id)].slice(0, 100)));
+  } catch {
+    /* private mode: the wizard just runs again */
+  }
+}
+
+const TABS = [
+  ['items', 'Items'],
+  ['people', 'People'],
+  ['settle', 'Settle']
 ];
 
-export default function Receipt({ receiptId, onExit }) {
+export default function Receipt({ receiptId, startWizard, onExit }) {
   const [receipt, setReceipt] = useState(null);
   const [people, setPeople] = useState([]);
   const [items, setItems] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | missing
-  const [flash, setFlash] = useState(null);
+  const [view, setView] = useState(null); // {mode:'wizard',step} | {mode:'tabs',tab}
   const [error, setError] = useState(null);
-  const [newPerson, setNewPerson] = useState('');
-  const [newItem, setNewItem] = useState('');
-  const [newPrice, setNewPrice] = useState('');
-  const [bulk, setBulk] = useState('');
-  const [showShareQr, setShowShareQr] = useState(false);
+  const [flash, setFlash] = useState(null);
+
   const timer = useRef(null);
+  const pending = useRef(0); // local writes in flight
+  const itemIds = useRef(new Set());
+  const flashTimer = useRef(null);
 
   const loadAll = useCallback(async () => {
     const [rec, ppl, its, asg] = await Promise.all([
@@ -51,538 +69,422 @@ export default function Receipt({ receiptId, onExit }) {
       setStatus('missing');
       return;
     }
+    const itemRows = its.data || [];
+    itemIds.current = new Set(itemRows.map((i) => i.id));
     setReceipt(rec.data);
     setPeople(ppl.data || []);
-    setItems(its.data || []);
+    setItems(itemRows);
     setAssignments((asg.data || []).map((a) => ({ item_id: a.item_id, person_id: a.person_id })));
     setStatus('ready');
+    return { receipt: rec.data, people: ppl.data || [], items: itemRows };
   }, [receiptId]);
 
-  // Several writes in a row (a pasted list, a sample) each fire a realtime
-  // event. Coalesce them into one refetch.
+  // Realtime and bulk writes both arrive in bursts. One trailing refetch covers
+  // the burst, and it waits while this device still has writes in flight.
   const refresh = useCallback(() => {
     clearTimeout(timer.current);
-    timer.current = setTimeout(loadAll, 220);
+    const tick = () => {
+      if (pending.current > 0) {
+        timer.current = setTimeout(tick, 250);
+        return;
+      }
+      loadAll();
+    };
+    timer.current = setTimeout(tick, 400);
   }, [loadAll]);
+
+  // Every write goes through here so the debounced refetch can see it.
+  const write = useCallback(async (fn) => {
+    pending.current += 1;
+    try {
+      const { error: e } = (await fn()) || {};
+      if (e) setError(e.message);
+      return !e;
+    } finally {
+      pending.current -= 1;
+    }
+  }, []);
 
   useEffect(() => {
-    loadAll();
-    return () => clearTimeout(timer.current);
-  }, [loadAll]);
+    let alive = true;
+    loadAll().then((first) => {
+      if (!alive || !first) return;
+      setView(decideView(receiptId, startWizard, first.people, first.items));
+    });
+    return () => {
+      alive = false;
+      clearTimeout(timer.current);
+      clearTimeout(flashTimer.current);
+    };
+  }, [loadAll, receiptId, startWizard]);
 
-  // Two phones at the same table stay in step.
   useEffect(() => {
     const channel = supabase
-      .channel(`rs:${receiptId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_receipts', filter: `id=eq.${receiptId}` }, refresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_people', filter: `receipt_id=eq.${receiptId}` }, refresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_items', filter: `receipt_id=eq.${receiptId}` }, refresh)
-      // Assignments carry no receipt_id, so this one is unfiltered and the
-      // refetch is what decides whether anything actually changed here.
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_item_assignments' }, refresh)
+      .channel('rs:' + receiptId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_receipts', filter: 'id=eq.' + receiptId }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_people', filter: 'receipt_id=eq.' + receiptId }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_items', filter: 'receipt_id=eq.' + receiptId }, refresh)
+      // Assignments carry no receipt_id, so this one cannot be filtered on the
+      // server. Drop events for items that are not on this receipt.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_item_assignments' }, (payload) => {
+        const id = payload.new?.item_id || payload.old?.item_id;
+        if (id && !itemIds.current.has(id)) return;
+        refresh();
+      })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
   }, [receiptId, refresh]);
 
-  // Keyed on the id, not the row, so a realtime refetch does not rewrite
-  // storage every time something on the receipt changes.
   useEffect(() => {
     if (receipt?.id) remember(receipt.id);
   }, [receipt?.id]);
 
-  function say(text) {
+  const say = useCallback((text) => {
     setFlash(text);
-    setTimeout(() => setFlash(null), 2600);
-  }
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), 2600);
+  }, []);
 
-  async function patchReceipt(patch) {
-    setReceipt((r) => ({ ...r, ...patch }));
-    const { error: e } = await supabase.from('rs_receipts').update(patch).eq('id', receiptId);
-    if (e) setError(e.message);
-  }
+  /* ---- derived ---- */
 
-  async function addPerson() {
-    const name = newPerson.trim();
-    if (!name) return;
-    setNewPerson('');
-    const { error: e } = await supabase.from('rs_people').insert({ receipt_id: receiptId, name });
-    if (e) setError(e.message);
-    refresh();
-  }
+  const crowd = useMemo(() => people.map((p, i) => ({ ...p, colorIndex: i })), [people]);
 
-  async function removePerson(id) {
-    await supabase.from('rs_people').delete().eq('id', id);
-    setPeople((prev) => prev.filter((p) => p.id !== id));
-    setAssignments((prev) => prev.filter((a) => a.person_id !== id));
-    refresh();
-  }
+  const split = useMemo(
+    () =>
+      splitReceipt({
+        people: crowd,
+        items,
+        assignments,
+        taxAmount: receipt?.tax_amount,
+        tipAmount: receipt?.tip_amount
+      }),
+    [crowd, items, assignments, receipt?.tax_amount, receipt?.tip_amount]
+  );
 
-  async function addRows(rows) {
-    if (!rows.length) return;
-    const { error: e } = await supabase.from('rs_items').insert(rows);
-    if (e) setError(e.message);
-    refresh();
-  }
+  // One pass instead of a filter per item per render. 25 items and 3 people
+  // used to mean thousands of array scans on every keystroke.
+  const claimed = useMemo(() => {
+    const map = new Map();
+    for (const a of assignments) {
+      let set = map.get(a.item_id);
+      if (!set) map.set(a.item_id, (set = new Set()));
+      set.add(a.person_id);
+    }
+    return map;
+  }, [assignments]);
 
-  async function addOneItem() {
-    const name = newItem.trim();
-    const price = parseFloat(newPrice);
-    if (!name || !isFinite(price)) return;
-    setNewItem('');
-    setNewPrice('');
-    await addRows([{ receipt_id: receiptId, name, price }]);
-  }
+  const byPerson = useMemo(() => new Map(split.perPerson.map((s) => [s.id, s])), [split]);
 
-  async function addBulk() {
+  // payer_name is free text, so a rename or a duplicate name can leave it
+  // pointing at nobody. Only treat it as a person when exactly one matches.
+  const payerName = (receipt?.payer_name || '').trim();
+  const payerMatches = crowd.filter((p) => p.name === payerName);
+  const payer = payerMatches.length === 1 ? payerMatches[0] : null;
+
+  const unassignedCount = split.unassignedItems.length;
+
+  /* ---- actions ---- */
+
+  const patchReceipt = useCallback(
+    async (patch) => {
+      setReceipt((r) => ({ ...r, ...patch }));
+      await write(() => supabase.from('rs_receipts').update(patch).eq('id', receiptId));
+      refresh();
+    },
+    [receiptId, refresh, write]
+  );
+
+  const addPeople = useCallback(
+    async (names) => {
+      const rows = names
+        .map((n) => n.trim())
+        .filter(Boolean)
+        .map((name) => ({ receipt_id: receiptId, name }));
+      if (!rows.length) return;
+      await write(() => supabase.from('rs_people').insert(rows));
+      refresh();
+    },
+    [receiptId, refresh, write]
+  );
+
+  const removePerson = useCallback(
+    async (id) => {
+      setPeople((prev) => prev.filter((p) => p.id !== id));
+      setAssignments((prev) => prev.filter((a) => a.person_id !== id));
+      await write(() => supabase.from('rs_people').delete().eq('id', id));
+      refresh();
+    },
+    [refresh, write]
+  );
+
+  // One insert with an array, never a loop. A 25 line receipt is one round trip.
+  const addItems = useCallback(
+    async (rows) => {
+      if (!rows.length) return false;
+      const ok = await write(() =>
+        supabase.from('rs_items').insert(rows.map((r) => ({ receipt_id: receiptId, name: r.name, price: r.price })))
+      );
+      refresh();
+      return ok;
+    },
+    [receiptId, refresh, write]
+  );
+
+  const removeItem = useCallback(
+    async (id) => {
+      setItems((prev) => prev.filter((i) => i.id !== id));
+      setAssignments((prev) => prev.filter((a) => a.item_id !== id));
+      await write(() => supabase.from('rs_items').delete().eq('id', id));
+      refresh();
+    },
+    [refresh, write]
+  );
+
+  const toggleAssign = useCallback(
+    async (itemId, personId) => {
+      const on = claimed.get(itemId)?.has(personId);
+      setAssignments((prev) =>
+        on
+          ? prev.filter((a) => !(a.item_id === itemId && a.person_id === personId))
+          : [...prev, { item_id: itemId, person_id: personId }]
+      );
+      await write(() =>
+        on
+          ? supabase.from('rs_item_assignments').delete().eq('item_id', itemId).eq('person_id', personId)
+          : supabase.from('rs_item_assignments').insert({ item_id: itemId, person_id: personId })
+      );
+      refresh();
+    },
+    [claimed, refresh, write]
+  );
+
+  // Bulk assign. The primary key is (item_id, person_id), so a second press
+  // would be a duplicate key and would fail the whole batch. Rows already held
+  // are dropped locally, and the insert ignores anything that slipped through.
+  const bulkAssign = useCallback(
+    async (rows) => {
+      const fresh = rows.filter((r) => !claimed.get(r.item_id)?.has(r.person_id));
+      if (!fresh.length) return;
+      setAssignments((prev) => [...prev, ...fresh]);
+      await write(() =>
+        supabase.from('rs_item_assignments').upsert(fresh, { onConflict: 'item_id,person_id', ignoreDuplicates: true })
+      );
+      refresh();
+    },
+    [claimed, refresh, write]
+  );
+
+  const splitEvenly = useCallback(() => {
     const rows = [];
-    for (const line of bulk.split('\n')) {
-      const cut = line.lastIndexOf(',');
-      if (cut < 0) continue;
-      const name = line.slice(0, cut).trim();
-      const price = parseFloat(line.slice(cut + 1).replace(/[^0-9.-]/g, ''));
-      if (name && isFinite(price)) rows.push({ receipt_id: receiptId, name, price });
-    }
-    if (!rows.length) {
-      say('Nothing to add. Put one item per line as name, price.');
-      return;
-    }
-    setBulk('');
-    await addRows(rows);
-  }
+    for (const it of items) for (const p of crowd) rows.push({ item_id: it.id, person_id: p.id });
+    return bulkAssign(rows);
+  }, [items, crowd, bulkAssign]);
 
-  async function removeItem(id) {
-    await supabase.from('rs_items').delete().eq('id', id);
-    setItems((prev) => prev.filter((i) => i.id !== id));
-    setAssignments((prev) => prev.filter((a) => a.item_id !== id));
-    refresh();
-  }
+  const restToPayer = useCallback(() => {
+    if (!payer) return;
+    return bulkAssign(split.unassignedItems.map((it) => ({ item_id: it.id, person_id: payer.id })));
+  }, [payer, split.unassignedItems, bulkAssign]);
 
-  async function toggleAssign(itemId, personId) {
-    const on = assignments.some((a) => a.item_id === itemId && a.person_id === personId);
-    setAssignments((prev) =>
-      on
-        ? prev.filter((a) => !(a.item_id === itemId && a.person_id === personId))
-        : [...prev, { item_id: itemId, person_id: personId }]
-    );
-    if (on) {
-      await supabase.from('rs_item_assignments').delete().eq('item_id', itemId).eq('person_id', personId);
-    } else {
-      await supabase.from('rs_item_assignments').insert({ item_id: itemId, person_id: personId });
-    }
-    refresh();
-  }
+  const savePersonField = useCallback(
+    async (id, key, value) => {
+      const current = people.find((p) => p.id === id);
+      if (!current || (current[key] || '') === value) return;
+      setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, [key]: value } : p)));
+      await write(() => supabase.from('rs_people').update({ [key]: value }).eq('id', id));
+      refresh();
+    },
+    [people, refresh, write]
+  );
 
-  async function savePersonField(id, key, value) {
-    const current = people.find((p) => p.id === id);
-    if (!current || (current[key] || '') === value) return;
-    setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, [key]: value } : p)));
-    const { error: e } = await supabase.from('rs_people').update({ [key]: value }).eq('id', id);
-    if (e) setError(e.message);
-  }
+  const setSettled = useCallback(
+    async (id, settled, via) => {
+      setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, settled, settled_via: via } : p)));
+      await write(() => supabase.from('rs_people').update({ settled, settled_via: via }).eq('id', id));
+      refresh();
+    },
+    [refresh, write]
+  );
 
-  async function setSettled(id, settled, via) {
-    setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, settled, settled_via: via } : p)));
-    const { error: e } = await supabase.from('rs_people').update({ settled, settled_via: via }).eq('id', id);
-    if (e) setError(e.message);
-  }
+  const savePhoto = useCallback(
+    async (blob) => {
+      const path = receiptId + '/' + Date.now() + '.jpg';
+      const up = await supabase.storage.from('receipt-photos').upload(path, blob, {
+        upsert: true,
+        contentType: 'image/jpeg'
+      });
+      if (up.error) {
+        setError(up.error.message);
+        return null;
+      }
+      const { data } = supabase.storage.from('receipt-photos').getPublicUrl(path);
+      await patchReceipt({ photo_url: data.publicUrl });
+      return data.publicUrl;
+    },
+    [receiptId, patchReceipt]
+  );
 
-  async function uploadPhoto(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const path = `${receiptId}/${Date.now()}-${file.name.replace(/[^\w.-]/g, '_')}`;
-    const up = await supabase.storage.from('receipt-photos').upload(path, file, { upsert: true });
-    if (up.error) {
-      setError(up.error.message);
-      return;
-    }
-    const { data } = supabase.storage.from('receipt-photos').getPublicUrl(path);
-    await patchReceipt({ photo_url: data.publicUrl });
-  }
+  const shareUrl = typeof window === 'undefined' ? '' : window.location.href;
 
-  async function shareLink() {
-    const url = window.location.href;
+  const shareSplit = useCallback(async () => {
     if (navigator.share) {
       try {
-        await navigator.share({ title: receipt?.title || 'Receipt', url });
-        return;
+        await navigator.share({ title: receipt?.title || 'Splitly', url: shareUrl });
       } catch {
-        return; // the person closed the sheet
+        /* the sheet was closed */
       }
+      return;
     }
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(shareUrl);
       say('Link copied.');
     } catch {
-      say(url);
+      say(shareUrl);
     }
-  }
+  }, [receipt?.title, shareUrl, say]);
 
-  if (status === 'loading') {
+  const goStep = useCallback(
+    (step) => {
+      if (step > 5) {
+        markDone(receiptId);
+        setView({ mode: 'tabs', tab: 'settle' });
+      } else {
+        if (step === 5) markDone(receiptId);
+        setView({ mode: 'wizard', step });
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [receiptId]
+  );
+
+  /* ---- render ---- */
+
+  if (status === 'loading' || !view) {
     return (
-      <div className="slip">
-        <p className="center">Loading</p>
+      <div className="col plain">
+        <header className="topbar">
+          <Wordmark onClick={onExit} />
+        </header>
+        <p className="empty">Loading</p>
       </div>
     );
   }
 
   if (status === 'missing') {
     return (
-      <div className="slip">
-        <p className="eyebrow">Receipt splitter</p>
-        <h1>No receipt here</h1>
-        <p className="note">That link points at a receipt that does not exist, or one that has been deleted.</p>
-        <div className="cta-stack">
-          <button className="btn primary wide" onClick={onExit}>
-            Go to my receipts
+      <div className="col plain">
+        <header className="topbar">
+          <Wordmark onClick={onExit} />
+        </header>
+        <div className="step">
+          <h1>No split here</h1>
+          <p className="sub">That link points at a split that does not exist, or one that has been deleted.</p>
+          <button className="btn primary wide tall" style={{ marginTop: 20 }} onClick={onExit}>
+            Back to my splits
           </button>
         </div>
       </div>
     );
   }
 
-  const split = splitReceipt({
-    people,
+  const shared = {
+    receipt,
+    people: crowd,
     items,
-    assignments,
-    taxAmount: receipt.tax_amount,
-    tipAmount: receipt.tip_amount
-  });
-  const byPerson = new Map(split.perPerson.map((s) => [s.id, s]));
-  const orphanIds = new Set(split.unassignedItems.map((i) => i.id));
+    claimed,
+    split,
+    byPerson,
+    payer,
+    payerName,
+    shareUrl,
+    say,
+    api: {
+      patchReceipt,
+      addPeople,
+      removePerson,
+      addItems,
+      removeItem,
+      toggleAssign,
+      splitEvenly,
+      restToPayer,
+      savePersonField,
+      setSettled,
+      savePhoto
+    }
+  };
 
-  // payer_name is free text, so a rename or a duplicate name can leave it
-  // pointing at nobody. Only treat it as a person when exactly one matches.
-  const payerName = (receipt.payer_name || '').trim();
-  const payerMatches = people.filter((p) => p.name === payerName);
-  const payerId = payerMatches.length === 1 ? payerMatches[0].id : null;
-  const payerIsListed = payerMatches.length > 0;
+  const banner = (
+    <>
+      {flash && <p className="banner">{flash}</p>}
+      {error && <p className="banner bad">{error}</p>}
+    </>
+  );
 
-  const owing = split.perPerson.filter((s) => s.id !== payerId && s.totalCents > 0);
-  const unsettled = owing.filter((s) => !people.find((p) => p.id === s.id)?.settled);
-  const outstanding = unsettled.reduce((sum, s) => sum + s.totalCents, 0);
-  const shareUrl = window.location.href;
+  const header = (
+    <header className="topbar">
+      <Wordmark onClick={onExit} />
+      <button className="icon-btn" onClick={shareSplit} aria-label="Share this split">
+        <IconShare />
+      </button>
+    </header>
+  );
+
+  if (view.mode === 'wizard') {
+    return (
+      <div className="col">
+        {header}
+        <Progress step={view.step} />
+        {banner}
+        <div className="step" key={view.step}>
+          {view.step === 2 && <PeopleStep {...shared} onNext={() => goStep(3)} onBack={() => goStep(2)} />}
+          {view.step === 3 && <ItemsStep {...shared} onNext={() => goStep(4)} onBack={() => goStep(2)} />}
+          {view.step === 4 && <AssignStep {...shared} onNext={() => goStep(5)} onBack={() => goStep(3)} />}
+          {view.step === 5 && <SettleStep {...shared} onDone={() => goStep(6)} onBack={() => goStep(4)} />}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="slip">
-      <header className="masthead">
-        <div className="grow">
-          <p className="eyebrow">Receipt splitter</p>
-          <input
-            className="title-input"
-            aria-label="Receipt title"
-            key={receipt.title}
-            defaultValue={receipt.title || ''}
-            placeholder="Name this one"
-            onBlur={(e) => {
-              const v = e.target.value.trim() || 'Untitled receipt';
-              if (v !== receipt.title) patchReceipt({ title: v });
-            }}
-          />
-        </div>
-      </header>
-
-      <div className="meta-row">
-        <input
-          type="date"
-          aria-label="Date"
-          key={receipt.event_date}
-          defaultValue={receipt.event_date || ''}
-          onBlur={(e) => {
-            if (e.target.value && e.target.value !== receipt.event_date) patchReceipt({ event_date: e.target.value });
-          }}
-        />
-        <button className="btn" onClick={shareLink}>
-          {typeof navigator !== 'undefined' && navigator.share ? 'Share link' : 'Copy link'}
-        </button>
-        <button className="btn quiet" onClick={() => setShowShareQr((v) => !v)} aria-expanded={showShareQr}>
-          {showShareQr ? 'Hide QR' : 'QR'}
-        </button>
-        <button className="btn quiet" onClick={onExit}>
-          My receipts
-        </button>
+    <div className="col">
+      {header}
+      <div className="step-head" style={{ marginBottom: 14 }}>
+        <h1>{receipt.title || 'Untitled split'}</h1>
+        <p className="sub">
+          <span className="num">{money(split.grandCents)}</span> across {crowd.length}{' '}
+          {crowd.length === 1 ? 'person' : 'people'}
+          {unassignedCount > 0 ? ` with ${unassignedCount} unassigned` : ''}
+        </p>
       </div>
-
-      {showShareQr && (
-        <div className="qr-share">
-          <Qr value={shareUrl} size={108} alt="QR code for this receipt" />
-          <p className="note">Anyone who scans this can see and edit the split. No account needed.</p>
-        </div>
-      )}
-
-      {flash && <p className="msg">{flash}</p>}
-      {error && <p className="msg bad">{error}</p>}
-
-      <div className="photo">
-        <label className="btn" htmlFor="photo-input">
-          {receipt.photo_url ? 'Replace photo' : 'Add a photo of the receipt'}
-        </label>
-        <input id="photo-input" type="file" accept="image/*" hidden onChange={uploadPhoto} />
-        {receipt.photo_url && <img src={receipt.photo_url} alt="The receipt" style={{ marginTop: 12 }} />}
-      </div>
-
-      <div className="tear" />
-
-      <section>
-        <h2>Who is splitting</h2>
-        <div className="row">
-          <input
-            type="text"
-            value={newPerson}
-            placeholder="Add a name"
-            onChange={(e) => setNewPerson(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addPerson()}
-          />
-          <button className="btn primary" onClick={addPerson}>
-            Add
+      <div className="tabs" role="tablist">
+        {TABS.map(([key, label]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={view.tab === key}
+            className={view.tab === key ? 'on' : ''}
+            onClick={() => setView({ mode: 'tabs', tab: key })}
+          >
+            {label}
           </button>
-        </div>
-        {people.length > 0 && (
-          <div className="chips">
-            {people.map((p) => (
-              <span className="chip" key={p.id}>
-                {p.name}
-                <button className="drop" onClick={() => removePerson(p.id)} aria-label={`Remove ${p.name}`}>
-                  &times;
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {people.length === 0 && <p className="note">Add everyone at the table first, then tap names to claim items.</p>}
-      </section>
-
-      <div className="tear" />
-
-      <section>
-        <h2>Items</h2>
-        <div className="row">
-          <input type="text" value={newItem} placeholder="Item" onChange={(e) => setNewItem(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addOneItem()} />
-          <input
-            type="text"
-            inputMode="decimal"
-            value={newPrice}
-            placeholder="0.00"
-            style={{ maxWidth: 96, flex: 'none' }}
-            onChange={(e) => setNewPrice(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addOneItem()}
-          />
-          <button className="btn primary" onClick={addOneItem}>
-            Add
-          </button>
-        </div>
-
-        <label className="field">
-          <span>Or paste a list, one item per line as name, price</span>
-          <textarea value={bulk} placeholder={'Bacon, 9.12\nPotatoes, 4.08'} onChange={(e) => setBulk(e.target.value)} />
-        </label>
-        <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn wide" onClick={addBulk}>
-            Add pasted items
-          </button>
-          <button className="btn wide" onClick={() => addRows(SAMPLE_ITEMS.map(([name, price]) => ({ receipt_id: receiptId, name, price })))}>
-            Load sample
-          </button>
-        </div>
-
-        <div style={{ marginTop: 16 }}>
-          {items.map((it) => {
-            const who = assignments.filter((a) => a.item_id === it.id).map((a) => a.person_id);
-            const orphan = orphanIds.has(it.id);
-            return (
-              <div className={'item' + (orphan ? ' orphan' : '')} key={it.id}>
-                <div className="item-head">
-                  <span className="item-name">{it.name}</span>
-                  <span className="item-price">{money(toCents(it.price))}</span>
-                  <button className="drop" onClick={() => removeItem(it.id)} aria-label={`Remove ${it.name}`}>
-                    &times;
-                  </button>
-                </div>
-                {people.length > 0 && (
-                  <div className="assign">
-                    {people.map((p) => (
-                      <button
-                        key={p.id}
-                        className={'pick' + (who.includes(p.id) ? ' on' : '')}
-                        aria-pressed={who.includes(p.id)}
-                        onClick={() => toggleAssign(it.id, p.id)}
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {orphan && people.length > 0 && <span className="orphan-note">Nobody claimed this</span>}
-              </div>
-            );
-          })}
-          {items.length === 0 && <p className="note">No items yet. Add them one at a time, paste a list, or load the sample.</p>}
-        </div>
-
-        <div className="handles" style={{ marginTop: 20 }}>
-          <label className="field">
-            <span>Tax ($)</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              key={String(receipt.tax_amount)}
-              defaultValue={fromCents(toCents(receipt.tax_amount))}
-              onBlur={(e) => {
-                const v = toCents(e.target.value) / 100;
-                if (v !== Number(receipt.tax_amount)) patchReceipt({ tax_amount: v });
-              }}
-            />
-          </label>
-          <label className="field">
-            <span>Tip ($)</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              key={String(receipt.tip_amount)}
-              defaultValue={fromCents(toCents(receipt.tip_amount))}
-              onBlur={(e) => {
-                const v = toCents(e.target.value) / 100;
-                if (v !== Number(receipt.tip_amount)) patchReceipt({ tip_amount: v });
-              }}
-            />
-          </label>
-        </div>
-        <p className="note">Tax and tip are split in proportion to what each person ordered.</p>
-      </section>
-
-      <div className="tear" />
-
-      <section>
-        <h2>The tally</h2>
-        <div className="tally">
-          <div className="line muted">
-            <span className="lbl">Items ({items.length})</span>
-            <span className="dots" />
-            <span className="val">{money(split.itemsCents)}</span>
-          </div>
-          {split.unassignedCents > 0 && (
-            <div className="line warn">
-              <span className="lbl">Unclaimed ({split.unassignedItems.length})</span>
-              <span className="dots" />
-              <span className="val">-{money(split.unassignedCents)}</span>
-            </div>
-          )}
-          {split.unassignedCents > 0 && (
-            <div className="line muted">
-              <span className="lbl">Claimed</span>
-              <span className="dots" />
-              <span className="val">{money(split.assignedCents)}</span>
-            </div>
-          )}
-          <div className="line muted">
-            <span className="lbl">Tax</span>
-            <span className="dots" />
-            <span className="val">{money(split.taxCents)}</span>
-          </div>
-          <div className="line muted">
-            <span className="lbl">Tip</span>
-            <span className="dots" />
-            <span className="val">{money(split.tipCents)}</span>
-          </div>
-          {split.unallocatedTaxCents + split.unallocatedTipCents > 0 && (
-            <div className="line warn">
-              <span className="lbl">Tax and tip nobody can carry yet</span>
-              <span className="dots" />
-              <span className="val">-{money(split.unallocatedTaxCents + split.unallocatedTipCents)}</span>
-            </div>
-          )}
-          <div className="line grand">
-            <span className="lbl">Total</span>
-            <span className="dots" />
-            <span className="val">{money(split.grandCents)}</span>
-          </div>
-        </div>
-
-        {split.unassignedCents > 0 && (
-          <p className="note flag">
-            {split.unassignedItems.length} item{split.unassignedItems.length === 1 ? ' is' : 's are'} in nobody&apos;s
-            total. Assign {split.unassignedItems.length === 1 ? 'it' : 'them'} and the total rises to{' '}
-            {money(split.itemsCents + split.taxCents + split.tipCents)}.
-          </p>
-        )}
-
-        {people.length > 0 && (
-          <div className="tally" style={{ marginTop: 16 }}>
-            {split.perPerson.map((s) => {
-              const p = people.find((x) => x.id === s.id);
-              return (
-                <div className={'line person' + (p?.settled ? ' done' : '')} key={s.id}>
-                  <span className="lbl">
-                    {s.name}
-                    {s.id === payerId ? ' (paid the bill)' : ''}
-                  </span>
-                  <span className="dots" />
-                  <span className="val">{money(s.totalCents)}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <div className="tear" />
-
-      <section>
-        <h2>Settle up</h2>
-        <label className="field">
-          <span>Who paid the bill</span>
-          <select value={payerName} onChange={(e) => patchReceipt({ payer_name: e.target.value })}>
-            <option value="">Nobody yet</option>
-            {people.map((p) => (
-              <option key={p.id} value={p.name}>
-                {p.name}
-              </option>
-            ))}
-            {payerName && !payerIsListed && <option value={payerName}>{payerName} (no longer on the receipt)</option>}
-          </select>
-        </label>
-
-        {payerName && owing.length > 0 && (
-          <p className="note">
-            {owing.map((s) => s.name).join(', ')} owe{owing.length === 1 ? 's' : ''} {payerName}{' '}
-            {owing.length === 1 ? money(owing[0].totalCents) : money(owing.reduce((t, s) => t + s.totalCents, 0)) + ' between them'}.
-          </p>
-        )}
-        {!payerName && people.length > 0 && <p className="note">Pick who paid and the requests below will name them.</p>}
-
-        {people.length === 0 && <p className="note">Add people and items first.</p>}
-
-        {people.map((p) => (
-          <PersonCard
-            key={p.id}
-            person={p}
-            share={byPerson.get(p.id)}
-            title={receipt.title}
-            shareUrl={shareUrl}
-            isPayer={p.id === payerId}
-            payerName={payerName}
-            onSaveField={savePersonField}
-            onSettle={setSettled}
-          />
         ))}
-      </section>
-
-      <div className="bar">
-        <div className="bar-in">
-          <span className="k">Total</span>
-          <span className="v">{money(split.grandCents)}</span>
-          <span className={'side' + (split.unassignedCents > 0 ? ' warn' : '')}>
-            {split.unassignedCents > 0
-              ? `${split.unassignedItems.length} unclaimed`
-              : outstanding > 0
-                ? `${money(outstanding)} outstanding`
-                : owing.length > 0
-                  ? 'All settled'
-                  : `${people.length} ${people.length === 1 ? 'person' : 'people'}`}
-          </span>
-        </div>
+      </div>
+      {banner}
+      <div className="step" key={view.tab}>
+        {view.tab === 'items' && <AssignStep {...shared} embedded />}
+        {view.tab === 'people' && <PeopleStep {...shared} embedded />}
+        {view.tab === 'settle' && <SettleStep {...shared} embedded />}
       </div>
     </div>
   );
+}
+
+// Where to drop someone when the page opens.
+function decideView(receiptId, startWizard, people, items) {
+  if (startWizard) return { mode: 'wizard', step: 2 };
+  if (doneIds().includes(receiptId)) return { mode: 'tabs', tab: 'settle' };
+  // Somebody else already built this one out, so show the finished split.
+  if (people.length >= 2 && items.length > 0) return { mode: 'tabs', tab: 'settle' };
+  return { mode: 'wizard', step: people.length >= 2 ? 3 : 2 };
 }

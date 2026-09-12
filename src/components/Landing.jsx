@@ -1,37 +1,48 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { splitReceipt, money } from '../lib/money.js';
 import { historyIds, remember, forget } from '../lib/history.js';
+import { AvatarStack, Progress, Wordmark } from './ui.jsx';
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Local calendar date. toISOString would hand back tomorrow after 8pm Eastern.
+export function today() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
 
-// Three shares that actually add up, so the sample tally is not a lie.
-const DEMO = [
-  ['Lee', 2418],
-  ['Dana', 1944],
-  ['Phil', 3102]
-];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export function prettyDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = String(iso).split('-').map(Number);
+  if (!y || !m || !d) return String(iso);
+  const label = MONTHS[m - 1] + ' ' + d;
+  return y === new Date().getFullYear() ? label : label + ', ' + y;
+}
+
+const RECENT_LIMIT = 12;
 
 export default function Landing({ onOpen }) {
-  const [trips, setTrips] = useState(null);
+  const [splits, setSplits] = useState(null);
+  const [naming, setNaming] = useState(false);
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(today);
+  const [payer, setPayer] = useState('Me');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const ids = historyIds();
+    const ids = historyIds().slice(0, RECENT_LIMIT);
     if (!ids.length) {
-      setTrips([]);
+      setSplits([]);
       return;
     }
     const { data: receipts, error: e } = await supabase.from('rs_receipts').select('*').in('id', ids);
     if (e) {
       setError(e.message);
-      setTrips([]);
+      setSplits([]);
       return;
     }
-
     const found = receipts || [];
     // Anything the database no longer has is gone for good, so stop listing it.
     for (const id of ids) if (!found.some((r) => r.id === id)) forget(id);
@@ -39,28 +50,30 @@ export default function Landing({ onOpen }) {
     const liveIds = found.map((r) => r.id);
     const [items, people] = await Promise.all([
       supabase.from('rs_items').select('id, receipt_id, name, price').in('receipt_id', liveIds),
-      supabase.from('rs_people').select('*').in('receipt_id', liveIds)
+      supabase.from('rs_people').select('id, receipt_id, name, settled').in('receipt_id', liveIds)
     ]);
     const itemRows = items.data || [];
+    const peopleRows = people.data || [];
     const itemIds = itemRows.map((i) => i.id);
     const asg = itemIds.length
       ? await supabase.from('rs_item_assignments').select('item_id, person_id').in('item_id', itemIds)
       : { data: [] };
     const assignments = asg.data || [];
 
-    // Device order decides the list, so the most recent one is on top.
     const byId = new Map(found.map((r) => [r.id, r]));
-    setTrips(
+    setSplits(
       ids
         .filter((id) => byId.has(id))
         .map((id) => {
           const receipt = byId.get(id);
           const mine = itemRows.filter((i) => i.receipt_id === id);
-          const crowd = (people.data || []).filter((p) => p.receipt_id === id);
+          const crowd = peopleRows.filter((p) => p.receipt_id === id);
+          const owing = crowd.filter((p) => p.name !== (receipt.payer_name || '').trim());
           return {
             receipt,
             people: crowd,
-            itemCount: mine.length,
+            owing: owing.length,
+            paid: owing.filter((p) => p.settled).length,
             split: splitReceipt({
               people: crowd,
               items: mine,
@@ -77,147 +90,154 @@ export default function Landing({ onOpen }) {
     load();
   }, [load]);
 
-  async function start() {
+  async function create() {
     setBusy(true);
     setError(null);
+    const name = payer.trim() || 'Me';
     const { data, error: e } = await supabase
       .from('rs_receipts')
-      .insert({ title: title.trim() || 'Untitled receipt', event_date: date || today() })
+      .insert({
+        title: title.trim() || "Dinner at Joe's",
+        event_date: date || today(),
+        payer_name: name
+      })
       .select()
       .single();
-    setBusy(false);
     if (e) {
+      setBusy(false);
       setError(e.message);
       return;
     }
+    // The payer is matched by name text, so the person row and payer_name have
+    // to be the same bytes. Written here, once, from the same variable.
+    const p = await supabase.from('rs_people').insert({ receipt_id: data.id, name });
+    setBusy(false);
+    if (p.error) {
+      setError(p.error.message);
+      return;
+    }
     remember(data.id);
-    onOpen(data.id);
+    onOpen(data.id, { wizard: true });
   }
 
-  function removeFromList(id) {
-    forget(id);
-    setTrips((prev) => prev.filter((t) => t.receipt.id !== id));
+  if (naming) {
+    return (
+      <div className="col">
+        <header className="topbar">
+          <Wordmark onClick={() => setNaming(false)} />
+        </header>
+        <Progress step={1} />
+        <div className="step">
+          <div className="step-head">
+            <p className="step-count">Step 1 of 5</p>
+            <h1>Name it</h1>
+            <p className="sub">A name and a date, so you can find this again later.</p>
+          </div>
+
+          {error && <p className="banner bad">{error}</p>}
+
+          <div className="card">
+            <label className="field">
+              <span>What was it</span>
+              <input
+                type="text"
+                value={title}
+                placeholder="Dinner at Joe's"
+                autoFocus
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Date</span>
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>Who paid</span>
+              <input
+                type="text"
+                value={payer}
+                placeholder="Me"
+                onChange={(e) => setPayer(e.target.value)}
+              />
+            </label>
+          </div>
+          <p className="tiny">Whoever paid gets added to the split, and everyone else settles up with them.</p>
+        </div>
+
+        <div className="dock">
+          <button className="btn primary wide tall" onClick={create} disabled={busy}>
+            {busy ? 'Setting up' : 'Continue'}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="slip">
-      <div className="hero">
-        <p className="eyebrow">Receipt splitter</p>
-        <h1>Split a receipt</h1>
-        <p className="lede">
-          Type in what was ordered, tap who had what, and everyone gets their own number with tax and tip
-          already worked in. Send the link and they can claim their own items from their phone.
-        </p>
+    <div className="col">
+      <header className="topbar">
+        <Wordmark onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} />
+      </header>
 
-        <div className="tally demo">
-          <div className="line muted">
-            <span className="lbl">Nashville trip dinner</span>
-            <span className="dots" />
-            <span className="val">3 people</span>
-          </div>
-          {DEMO.map(([name, cents]) => (
-            <div className="line" key={name}>
-              <span className="lbl">{name}</span>
-              <span className="dots" />
-              <span className="val">{money(cents)}</span>
-            </div>
-          ))}
-          <div className="line grand">
-            <span className="lbl">Total</span>
-            <span className="dots" />
-            <span className="val">{money(DEMO.reduce((s, [, c]) => s + c, 0))}</span>
-          </div>
-        </div>
+      <div className="splash">
+        <h1 className="h-xl">Everyone pays for what they ordered.</h1>
+        <p className="sub">
+          Snap the receipt or type it in, tap who had what, and everyone gets their own number with tax and tip
+          already worked in.
+        </p>
       </div>
 
-      {error && <p className="msg bad">{error}</p>}
+      {error && <p className="banner bad">{error}</p>}
 
-      <div className="tear" />
+      <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
+      <RecentList splits={splits} onOpen={onOpen} />
 
-      <section>
-        <h2>Start a new split</h2>
-        <label className="field">
-          <span>What was it</span>
-          <input
-            type="text"
-            value={title}
-            placeholder="Nashville trip dinner"
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && start()}
-          />
-        </label>
-        <label className="field">
-          <span>Date</span>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </label>
-        <div className="cta-stack">
-          <button className="btn primary wide" onClick={start} disabled={busy}>
-            Start a new split
-          </button>
-        </div>
-      </section>
+      <div className="dock">
+        <button className="btn primary wide tall" onClick={() => setNaming(true)}>
+          New split
+        </button>
+      </div>
+    </div>
+  );
+}
 
-      <div className="tear" />
+function RecentList({ splits, onOpen }) {
+  const rows = useMemo(() => splits || [], [splits]);
 
-      <section>
-        <h2>On this device</h2>
+  if (splits === null) return <p className="empty">Loading</p>;
+  if (!rows.length) return <p className="empty">Your splits show up here once you start one.</p>;
 
-        {trips === null && <p className="center">Loading</p>}
-        {trips?.length === 0 && (
-          <p className="empty">
-            Nothing here yet. Every split you start or open on this device gets listed here. There is no account,
-            so the list lives on the device and the link is what you share.
-          </p>
-        )}
-
-        {trips && trips.length > 0 && (
-          <>
-            <ul className="history">
-              {trips.map((t) => (
-                <li key={t.receipt.id}>
-                  <div className="trip">
-                    <div className="grow">
-                      <a
-                        href={`?receipt=${t.receipt.id}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          onOpen(t.receipt.id);
-                        }}
-                      >
-                        <span className="trip-name">{t.receipt.title || 'Untitled receipt'}</span>
-                        <span className="trip-meta">
-                          {t.receipt.event_date || ''} · {t.itemCount} item{t.itemCount === 1 ? '' : 's'} ·{' '}
-                          {t.people.length} {t.people.length === 1 ? 'person' : 'people'}
-                        </span>
-                      </a>
-                      {t.people.length > 0 && (
-                        <div className="pills">
-                          {t.people.map((p) => (
-                            <span className={'pill' + (p.settled ? ' done' : '')} key={p.id}>
-                              {p.name} {p.settled ? 'paid' : 'open'}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <span className="trip-amt">{money(t.split.grandCents)}</span>
-                    <button
-                      className="drop"
-                      onClick={() => removeFromList(t.receipt.id)}
-                      aria-label={`Remove ${t.receipt.title} from this list`}
-                    >
-                      &times;
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <p className="note">
-              Removing one takes it off this device only. The link keeps working for anyone who still has it.
-            </p>
-          </>
-        )}
-      </section>
+  return (
+    <div className="recent">
+      {rows.map((t) => (
+        <a
+          key={t.receipt.id}
+          className="recent-card"
+          href={'?receipt=' + t.receipt.id}
+          onClick={(e) => {
+            e.preventDefault();
+            onOpen(t.receipt.id);
+          }}
+        >
+          <div className="top">
+            <span className="title">{t.receipt.title || 'Untitled split'}</span>
+            <span className="total num">{money(t.split.grandCents)}</span>
+          </div>
+          <div className="when">{prettyDate(t.receipt.event_date)}</div>
+          <div className="bottom">
+            <AvatarStack people={t.people} />
+            {t.owing > 0 ? (
+              <span className={'paid' + (t.paid === t.owing ? ' all' : '')}>
+                {t.paid === t.owing ? 'All settled' : `${t.paid} of ${t.owing} paid`}
+              </span>
+            ) : (
+              <span className="paid">
+                {t.people.length} {t.people.length === 1 ? 'person' : 'people'}
+              </span>
+            )}
+          </div>
+        </a>
+      ))}
     </div>
   );
 }
