@@ -1,101 +1,106 @@
-# Receipt Splitter — handoff
+# Receipt Splitter
 
-Turns a grocery/restaurant receipt into a shareable link where any number of
-people can be assigned items, see what they owe (tax included), and pay each
-other via Venmo, Cash App, Zelle, Apple Pay, or cash — all link-based, no
-login. This doc is the full build scope. Code for the app itself is already
-written below; what's left is provisioning + deploy + polish.
+Type in what a table ordered, tap who had what, and everyone gets their own
+number with tax and tip worked in. Send the link and the other people can
+claim their own items from their phones. Each person gets payment links and a
+QR code so the money can move without anyone doing arithmetic.
 
-## What's already built (in this folder)
+Vite + React + Supabase. No server code.
 
-- `src/App.jsx` — full React app: add/remove people, add items (one at a
-  time or pasted in bulk), assign any item to any subset of people, tax
-  entered as a dollar amount and split proportionally, live totals per
-  person, a photo upload (stored in Supabase Storage, shown for reference
-  only — not OCR'd), and per-person payment cards with a Request/Send
-  toggle that builds Venmo/Cash App/Zelle/Apple Pay links plus prefilled
-  text/email share links.
-- `src/App.css` — all styling, ported from the working prototype.
-- `src/supabaseClient.js` — Supabase JS client, reads keys from env vars.
-- `supabase/schema.sql` — full schema: `rs_receipts`, `rs_people`, `rs_items`,
-  `rs_item_assignments`, with RLS policies open enough for a link-based MVP.
-- `.env.example` — the two env vars the app needs.
+## What v2 added
 
-This was hand-written outside a real Node environment, so **treat it as a
-strong first draft, not tested code** — run `npm install` and `npm run dev`
-first and expect to fix small issues (import paths, a missed prop, etc.)
-before it's production-ready.
+**A landing page with history.** Visiting the app with no `?receipt=` parameter
+now shows a hero, a form to name and date a new split, and a history of every
+receipt this browser created or opened (kept in localStorage, no account),
+newest first with the title, date, item count, total, and a paid or open pill
+per person. The remove button only drops it from this phone's list.
 
-## Deployed 2026-09-12
+**Titles and dates.** A receipt is "Nashville trip dinner", not a UUID. Both
+fields are editable in place at the top of the page.
 
-Tables live in the `life-command-center` Supabase project (prefixed `rs_`), storage bucket `receipt-photos`, repo `agentiksolutions/receipt-splitter`, hosted on Vercel. The anon role also needed explicit table GRANTs in that project; both migrations are recorded in Supabase.
+**Tip, alongside tax.** Both are entered as dollar amounts and split in
+proportion to what each person ordered. Somebody who ordered nothing pays
+nothing toward either.
 
-## Original handoff steps (done)
+**Arithmetic that closes.** All math runs in integer cents in `src/lib/money.js`.
+The per-person totals sum to the displayed total exactly, with any residual cent
+going to the largest share. Items nobody has claimed are held out of every
+total and flagged, and if nothing is claimed at all the tax and tip appear on
+their own line rather than disappearing into a total nobody owes.
 
-### 1. Provision Supabase
-- Create a new Supabase project.
-- Run `supabase/schema.sql` in the SQL editor.
-- Create a public Storage bucket named `receipt-photos` (Storage → New
-  bucket → Public bucket).
-- Copy the project URL and anon public key into `.env` (see
-  `.env.example`).
+**Who paid.** Pick the payer and the summary reads "Lee, Dana owe Phil $87.49
+between them". The payer's own card shows their share with no request buttons,
+because they are not collecting from themselves.
 
-### 2. Install and smoke-test locally
+**Payment cards.** Each person's handles for Venmo, Cash App, Zelle, phone and
+email save to the database as you leave each field. A Request or Send toggle
+flips the direction of every link. There is a QR code per person, and marking
+someone settled records which method they used and mutes their card.
+
+**Realtime.** Two phones open on the same receipt stay in step. The app watches
+all four tables and refetches when any of them changes.
+
+**A visual design.** Plain CSS in `src/App.css`, mobile-first, one accent, dark
+mode through `prefers-color-scheme`.
+
+## Setup
+
 ```bash
 npm install
 npm run dev
 ```
-Open the local URL, confirm you can add people/items, assign, see totals
-update, and that a fresh visit to the same `?receipt=<uuid>` URL in another
-browser tab shows the same state (proves Supabase read/write works).
 
-### 3. Push to GitHub
+`.env` needs `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. See `.env.example`.
+
+`supabase/schema.sql` is the whole schema, matching what is live. Run it only
+against a fresh project. It also needs a public storage bucket named
+`receipt-photos`, created from the dashboard.
+
+## Checking the math
+
 ```bash
-git init
-git add .
-git commit -m "Initial receipt splitter"
-gh repo create receipt-splitter --public --source=. --push
+node src/lib/money.test.js
 ```
-(or push manually to a repo you've already created — no GitHub connector
-was available in the chat session that produced this handoff, so this step
-was never run).
 
-### 4. Deploy to Vercel
-- Import the GitHub repo in Vercel.
-- Framework preset: Vite.
-- Add the two env vars (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`) in
-  Vercel's project settings.
-- Deploy. Every new receipt gets its own shareable
-  `https://your-app.vercel.app/?receipt=<uuid>` link.
+Plain node, no test framework. It asserts that per-person totals reconcile to
+the cent across odd splits, unclaimed items, zero-share people, and crowds of
+two to nine. If the reconciliation ever breaks, this fails.
 
-### 5. Known gaps worth closing
-- **No auth / open RLS.** Anyone with a receipt's link can read and edit
-  it. Fine for splitting a grocery bill with friends; not fine for
-  anything sensitive. If that matters, add Supabase Auth and scope RLS
-  policies to a `created_by` column.
-- **No realtime sync.** Two people open the same link and edit
-  simultaneously, the state can go stale until a refresh. Supabase
-  Realtime subscriptions on the four tables would fix this — worth adding
-  if this gets used live at the table.
-- **Payment links are best-effort.** Venmo supports amount-prefilled
-  request (`txn=charge`) and pay (`txn=pay`) links. Cash App only supports
-  amount-prefilled *send* links (`cash.app/$user/amount`) — a "request"
-  from Cash App falls back to a prefilled text. Zelle and Apple Pay have
-  no amount-in-link support at all in either direction, so both always
-  fall back to a prefilled text with the number in it. This is a platform
-  limitation, not a bug — flag it in the UI if it confuses testers.
-- **Photo isn't attached to texts/emails.** `mailto:`/`sms:` links can't
-  carry attachments. The photo lives in Supabase Storage and is shown in
-  the app for reference, but sharing it elsewhere means sending the
-  Storage URL or the app link itself, not an attachment.
-- **No delete-a-receipt / list-my-receipts view.** Currently a receipt is
-  only reachable via its exact link. A "my receipts" view would need
-  auth first.
-- **No tests.** Given the small surface area, a handful of component
-  tests (add/remove item, assignment math, tax split) would catch
-  regressions cheaply.
+## What the payment links can and cannot do
 
-## Tech stack
-Vite + React (no framework needed, no server code — Supabase is the only
-backend), Supabase (Postgres + Storage), Vercel (static hosting + env
-vars). No auth library, no CSS framework — plain CSS in `App.css`.
+| App | Request | Send |
+|---|---|---|
+| Venmo | link with the amount and note | link with the amount and note |
+| Cash App | prefilled text | link with the amount |
+| Zelle | prefilled text | prefilled text |
+| Apple Pay | prefilled text | prefilled text |
+
+Zelle and Apple Pay have no way to carry an amount in a link in either
+direction, so both open a text message with the amount written into it. That is
+a platform limit, not a bug, and the interface says so on each card.
+
+The QR code on a person's card encodes their Venmo link when they have a Venmo
+username, so somebody across the table can scan it and land on a prefilled
+payment. Without a Venmo username it encodes the receipt link instead.
+
+## Known limits
+
+Anyone with a receipt link can read and edit it. That is deliberate, since
+people at a table are not going to make accounts, but it means the link is the
+only thing protecting a receipt.
+
+History is per device. Open the same link on a second phone and it joins that
+phone's list, with no way to see the first phone's list. Clearing site data
+clears the list, and the receipts themselves stay in the database.
+
+Nothing deletes a receipt row. The live delete policy on `rs_receipts` is
+scoped to an owner, and with no sign-in it matches nobody, so removing a row
+from the list only forgets it locally.
+
+The photo is a visual reference and is not read for text. It cannot ride along
+on a text or email either, because `sms:` and `mailto:` links carry no
+attachments.
+
+## Deployed 2026-09-12
+
+Tables live in the `life-command-center` Supabase project (prefixed `rs_`), storage bucket `receipt-photos`, repo `agentiksolutions/receipt-splitter`, hosted on Vercel. The anon role also needed explicit table GRANTs in that project; both migrations are recorded in Supabase.
