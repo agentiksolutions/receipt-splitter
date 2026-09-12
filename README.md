@@ -93,9 +93,10 @@ History is per device. Open the same link on a second phone and it joins that
 phone's list, with no way to see the first phone's list. Clearing site data
 clears the list, and the receipts themselves stay in the database.
 
-Nothing deletes a receipt row. The live delete policy on `rs_receipts` is
-scoped to an owner, and with no sign-in it matches nobody, so removing a row
-from the list only forgets it locally.
+Nothing deletes a receipt row. The delete rule live on `rs_receipts` matches no
+client this app can be, so removing a row from the list only forgets it on this
+device. People, items and assignments can still be deleted by anyone with the
+link. See the comments in `supabase/schema.sql` for the exact rule.
 
 The photo is a visual reference and is not read for text. It cannot ride along
 on a text or email either, because `sms:` and `mailto:` links carry no
