@@ -6,6 +6,14 @@ import Profile from './components/Profile.jsx';
 import { historyIds, profile } from './lib/history.js';
 import { ConfirmHost, IconClose, Toaster } from './components/ui.jsx';
 
+// Vercel gives every branch its own permanent address, so the branch name is
+// sitting in the hostname and nothing has to be configured to read it. The bar
+// only appears off main. On the live site the test is false and this renders
+// nothing, which is why it is safe to carry in the same code as production.
+const STAGING = /-git-(?!main-)/.test(
+  typeof window === 'undefined' ? '' : window.location.hostname
+);
+
 const readRoute = () => {
   const q = new URLSearchParams(window.location.search);
   return { id: q.get('receipt'), trip: q.get('trip'), page: q.get('page') };
@@ -106,6 +114,11 @@ export default function App() {
 
   return (
     <div className="app">
+      {STAGING && (
+        <div className="staging-bar" role="status">
+          Test version. Bills here are not on the real app.
+        </div>
+      )}
       {screen}
       {showProfile && <Profile firstRun={firstRun.current} onClose={() => setShowProfile(false)} />}
       <Toaster />

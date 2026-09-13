@@ -1199,3 +1199,20 @@ button.chip { font-size: 14px; color: var(--muted); }
   from { background-position: 200% 0; }
   to { background-position: -200% 0; }
 }
+
+/* Only ever rendered off main. Fixed rather than in the flow so it cannot push
+   the sticky action bar around and change what is being tested. */
+.staging-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  color: #3d2b00;
+  background: #ffd75e;
+  border-bottom: 1px solid #e0b73a;
+}
