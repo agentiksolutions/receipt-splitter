@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { splitReceipt, money } from '../lib/money.js';
 import { archive, archivedIds, forget, historyIds, remember, unarchive } from '../lib/history.js';
@@ -110,7 +110,6 @@ export default function Landing({ onOpen, onMenu, intent }) {
   }, [intent]);
 
   async function removeSplit(id) {
-    if (!window.confirm('Delete this split for everyone who has the link?')) return;
     const { error: e } = await supabase.from('rs_receipts').delete().eq('id', id);
     if (e) {
       setError(e.message);
@@ -408,6 +407,11 @@ function SettleMock() {
   );
 }
 
+export const DELETE_ASK = 'Delete this split for everyone who has the link?';
+
+// Past this share of the card's width, letting go commits the action.
+const COMMIT_AT = 0.4;
+
 function RecentList({ splits, onOpen, onArchive, onUnarchive, onDelete }) {
   const rows = useMemo(() => splits || [], [splits]);
 
@@ -417,49 +421,181 @@ function RecentList({ splits, onOpen, onArchive, onUnarchive, onDelete }) {
   return (
     <div className="recent">
       {rows.map((t) => (
-        <div className="recent-item" key={t.receipt.id}>
+        <SwipeRow
+          key={t.receipt.id}
+          row={t}
+          onOpen={onOpen}
+          onArchive={onArchive}
+          onUnarchive={onUnarchive}
+          onDelete={onDelete}
+        />
+      ))}
+    </div>
+  );
+}
+
+// One card that slides under the finger. Green behind the right edge to file it
+// away, red behind the left edge to delete it, the way Mail does it.
+function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
+  const [dx, setDx] = useState(0);
+  const [leaving, setLeaving] = useState(0);
+  const [menu, setMenu] = useState(false);
+  const box = useRef(null);
+  const drag = useRef(null);
+  const swiped = useRef(false);
+
+  const id = row.receipt.id;
+  const fileLabel = onUnarchive ? 'Unarchive' : 'Archive';
+  const width = box.current ? box.current.offsetWidth : 320;
+  const armed = Math.abs(dx) >= width * COMMIT_AT;
+
+  function file() {
+    (onUnarchive || onArchive)(id);
+  }
+
+  function askDelete() {
+    if (!window.confirm(DELETE_ASK)) return false;
+    onDelete(id);
+    return true;
+  }
+
+  function down(e) {
+    swiped.current = false;
+    drag.current = { x: e.clientX, y: e.clientY, axis: null, id: e.pointerId, dx: 0 };
+  }
+
+  // The axis is decided once and then kept. Until it is, nothing moves, so a
+  // vertical flick scrolls the page normally instead of dragging a card.
+  function move(e) {
+    const d = drag.current;
+    if (!d) return;
+    const mx = e.clientX - d.x;
+    const my = e.clientY - d.y;
+    if (!d.axis) {
+      if (Math.abs(mx) - Math.abs(my) > 8) {
+        d.axis = 'x';
+        try {
+          e.currentTarget.setPointerCapture(d.id);
+        } catch {
+          /* mouse without capture support: the drag still works */
+        }
+      } else if (Math.abs(my) > 8) {
+        d.axis = 'y';
+      }
+    }
+    if (d.axis !== 'x') return;
+    swiped.current = true;
+    // The ref is the truth. A flick can end before React commits the state, and
+    // then a real past-threshold swipe would snap back for no visible reason.
+    d.dx = mx;
+    setDx(mx);
+  }
+
+  function up() {
+    const d = drag.current;
+    drag.current = null;
+    if (!d || d.axis !== 'x') return;
+    const moved = d.dx;
+    if (Math.abs(moved) < width * COMMIT_AT) {
+      setDx(0);
+      return;
+    }
+    if (moved < 0) {
+      setLeaving(-1);
+      setTimeout(file, 200);
+      return;
+    }
+    if (!askDelete()) {
+      setDx(0);
+      return;
+    }
+    setLeaving(1);
+  }
+
+  const shift = leaving ? leaving * width * 1.05 : dx;
+
+  return (
+    <div className="recent-item">
+      <div className="swipe" ref={box}>
+        {shift !== 0 && (
+          <span className={'swipe-bg ' + (shift > 0 ? 'del' : 'arch')} aria-hidden="true">
+            {armed
+              ? shift > 0
+                ? 'Release to delete'
+                : 'Release to ' + fileLabel.toLowerCase()
+              : shift > 0
+                ? 'Delete'
+                : fileLabel}
+          </span>
+        )}
         <a
-          className="recent-card"
-          href={'?receipt=' + t.receipt.id}
+          className={'recent-card' + (drag.current && drag.current.axis === 'x' ? '' : ' glide')}
+          href={'?receipt=' + id}
+          style={{ transform: 'translateX(' + shift + 'px)' }}
+          onPointerDown={down}
+          onPointerMove={move}
+          onPointerUp={up}
+          onPointerCancel={up}
           onClick={(e) => {
             e.preventDefault();
-            onOpen(t.receipt.id);
+            if (swiped.current) return;
+            onOpen(id);
           }}
         >
           <div className="top">
-            <span className="title">{t.receipt.title || 'Untitled split'}</span>
-            <span className="total num">{money(t.split.grandCents)}</span>
+            <span className="title">{row.receipt.title || 'Untitled split'}</span>
+            <span className="total num">{money(row.split.grandCents)}</span>
           </div>
-          <div className="when">{prettyDate(t.receipt.event_date)}</div>
+          <div className="when">{prettyDate(row.receipt.event_date)}</div>
           <div className="bottom">
-            <AvatarStack people={t.people} />
-            {t.owing > 0 ? (
-              <span className={'paid' + (t.paid === t.owing ? ' all' : '')}>
-                {t.paid === t.owing ? 'All settled' : `${t.paid} of ${t.owing} paid`}
+            <AvatarStack people={row.people} />
+            {row.owing > 0 ? (
+              <span className={'paid' + (row.paid === row.owing ? ' all' : '')}>
+                {row.paid === row.owing ? 'All settled' : `${row.paid} of ${row.owing} paid`}
               </span>
             ) : (
               <span className="paid">
-                {t.people.length} {t.people.length === 1 ? 'person' : 'people'}
+                {row.people.length} {row.people.length === 1 ? 'person' : 'people'}
               </span>
             )}
           </div>
         </a>
-        <div className="row-actions">
-          {onUnarchive ? (
-            <button className="btn ghost sm" onClick={() => onUnarchive(t.receipt.id)}>
-              Unarchive
-            </button>
-          ) : (
-            <button className="btn ghost sm" onClick={() => onArchive(t.receipt.id)}>
-              Archive
-            </button>
-          )}
-          <button className="btn ghost sm" onClick={() => onDelete(t.receipt.id)}>
+      </div>
+
+      <div className="row-actions">
+        <button className="btn ghost sm" onClick={file}>
+          {fileLabel}
+        </button>
+        <button className="btn ghost sm" onClick={askDelete}>
+          Delete
+        </button>
+      </div>
+
+      <button className="offscreen" onClick={() => setMenu((v) => !v)} aria-expanded={menu}>
+        More actions for {row.receipt.title || 'Untitled split'}
+      </button>
+      {menu && (
+        <div className="row-menu">
+          <button
+            className="sheet-row"
+            onClick={() => {
+              setMenu(false);
+              file();
+            }}
+          >
+            {fileLabel}
+          </button>
+          <button
+            className="sheet-row"
+            onClick={() => {
+              setMenu(false);
+              askDelete();
+            }}
+          >
             Delete
           </button>
         </div>
-        </div>
-      ))}
+      )}
     </div>
   );
 }
