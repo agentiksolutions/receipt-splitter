@@ -521,6 +521,7 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
   const [name, setName] = useState('');
   const [editing, setEditing] = useState(null);
   const [draftName, setDraftName] = useState('');
+  const [realName, setRealName] = useState('');
   // Which name this device has already put on the split. A boolean would either
   // never reopen after a rename or reopen during one, and a rename briefly
   // leaves the new name on the person before `meName` catches up.
@@ -594,6 +595,24 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
   }
 
 
+  // True only while you are on your own split under the placeholder name.
+  const myRow = people.find((p) => personKey(p.name) === personKey(meName));
+  const needsRealName = Boolean(myRow) && personKey(meName) === 'me';
+
+  // The same write the pencil rename does, from a field that says what it is
+  // for. It renames the row, moves payer_name with it, and saves the name to
+  // the profile so no later split starts as "Me" again.
+  async function nameMyself() {
+    const v = realName.trim();
+    if (!v || !myRow) return;
+    setRealName('');
+    if (people.some((p) => p.id !== myRow.id && personKey(p.name) === personKey(v))) return;
+    const wasPayer = payer && payer.id === myRow.id;
+    await api.savePersonField(myRow.id, 'name', v);
+    if (wasPayer) api.patchReceipt({ payer_name: v });
+    onRename(v);
+  }
+
   function drop(person) {
     if (personKey(person.name) === personKey(meName)) setMeRemoved(receiptId, true);
     api.removePerson(person.id);
@@ -656,6 +675,38 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
               </button>
             ))}
           </div>
+        )}
+
+        {/* You go on your own split as the literal word "Me" until you give a
+            name, and that word is what every friend sees on the link and on the
+            PDF statement: "Total owed to Me". Nothing used to say so. Renaming
+            the chip already saves the name to your profile for every split
+            after this one, so this asks once and then never appears again. */}
+        {needsRealName && (
+          <div className="inline" style={{ marginTop: 12 }}>
+            <input
+              type="text"
+              value={realName}
+              placeholder="Your name"
+              aria-label="Your name, which your friends see"
+              autoComplete="off"
+              onChange={(e) => setRealName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  nameMyself();
+                }
+              }}
+            />
+            <button className="btn soft" onClick={nameMyself} disabled={!realName.trim()} aria-label="Save your name">
+              <IconPlus />
+            </button>
+          </div>
+        )}
+        {needsRealName && (
+          <p className="tiny" style={{ marginTop: 8 }}>
+            You are on this split as Me. Your friends see that on the link and on the statement.
+          </p>
         )}
 
         {people.length > 0 && <p className="tiny" style={{ marginTop: 12 }}>Tap the person who paid the bill.</p>}

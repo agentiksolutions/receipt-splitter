@@ -106,7 +106,13 @@ export function buildStatementPdf({
   doc.setFont('helvetica', 'normal');
 
   const state = { y: MARGIN };
-  const payerName = payer ? payer.name : '';
+  // A statement is read by somebody else, so a name that only means anything on
+  // the phone that wrote it is worse than no name. Somebody who never set a
+  // profile name goes on their own split as the literal word "Me", and that
+  // printed as "Total owed to Me" and "How to pay Me" on the copy the friend
+  // received. Treated as unnamed, which is what the fallback copy already
+  // handles. The person section on the split asks for a real name instead.
+  const payerName = selfName(payer ? payer.name : '');
   const title = (receipt?.title || '').trim() || 'Untitled split';
 
   drawHeader(doc, state);
@@ -126,6 +132,14 @@ export function buildStatementPdf({
 
   drawFooters(doc, shareUrl);
   return doc.output('blob');
+}
+
+// Names that mean "whoever is holding this phone". They are correct on screen
+// and meaningless in a document handed to somebody else.
+const SELF_WORDS = new Set(['me', 'you', 'myself', 'self']);
+export function selfName(name) {
+  const clean = String(name || '').trim();
+  return SELF_WORDS.has(clean.toLowerCase()) ? '' : clean;
 }
 
 // --- layout helpers ---------------------------------------------------------
@@ -281,7 +295,7 @@ function drawPersonStatement(doc, state, { person, split, payer, payerName }) {
   if (handles.length) {
     ensure(doc, state, 14 + handles.length * 6);
     setType(doc, 11, 'bold');
-    text(doc, 'How to pay ' + payerName, MARGIN, state.y);
+    text(doc, payerName ? 'How to pay ' + payerName : 'How to pay', MARGIN, state.y);
     state.y += 7;
     for (const [label, value] of handles) {
       setType(doc, 10, 'normal', GRAY);
