@@ -614,7 +614,7 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
                   >
                     {p.name}
                   </button>
-                  {isMe && <span className="tag">you</span>}
+                  {isMe && personKey(p.name) !== 'me' && <span className="tag">you</span>}
                   {isPayer && <span className="tag">paid</span>}
                 </Chip>
               );
