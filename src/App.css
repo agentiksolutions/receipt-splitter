@@ -1201,7 +1201,13 @@ button.chip { font-size: 14px; color: var(--muted); }
 }
 
 /* Only ever rendered off main. Fixed rather than in the flow so it cannot push
-   the sticky action bar around and change what is being tested. */
+   the sticky action bar around and change what is being tested. Being fixed, it
+   sits on top of the header, so the app takes matching padding to clear it. The
+   two heights have to move together. */
+.app-staging {
+  padding-top: 27px;
+}
+
 .staging-bar {
   position: fixed;
   top: 0;

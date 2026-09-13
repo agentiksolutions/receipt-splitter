@@ -113,7 +113,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={'app' + (STAGING ? ' app-staging' : '')}>
       {STAGING && (
         <div className="staging-bar" role="status">
           Test version. Bills here are not on the real app.
