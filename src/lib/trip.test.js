@@ -166,4 +166,64 @@ check('the recorded row wins over the profile name', () => {
   assert.equal(findMe(people, '', ''), null);
 });
 
+check('a share already paid does not get collected twice', () => {
+  // Two nights away. Jordan fronts both. Casey squares up for Friday in cash on
+  // the spot and gets marked paid; Riley does not. Before this, the trip netted
+  // the whole weekend as though no money had moved, so Friday's cash was billed
+  // to Casey a second time on Sunday.
+  const friday = {
+    payerName: 'Jordan',
+    grandCents: 9000,
+    perPerson: [
+      { id: 'a', name: 'Jordan', totalCents: 3000 },
+      { id: 'b', name: 'Casey', totalCents: 3000, settled: true },
+      { id: 'c', name: 'Riley', totalCents: 3000 }
+    ]
+  };
+  const saturday = {
+    payerName: 'Jordan',
+    grandCents: 6000,
+    perPerson: [
+      { id: 'd', name: 'Jordan', totalCents: 2000 },
+      { id: 'e', name: 'Casey', totalCents: 2000 },
+      { id: 'f', name: 'Riley', totalCents: 2000 }
+    ]
+  };
+
+  const rows = byKey(tripBalances([friday, saturday]));
+  assert.equal(rows.get('casey').netCents, -2000, 'Casey owes Saturday only');
+  assert.equal(rows.get('riley').netCents, -5000, 'Riley owes both nights');
+  assert.equal(rows.get('jordan').netCents, 7000, 'Jordan is out the other two shares');
+  assert.equal(
+    rows.get('jordan').paidCents,
+    12000,
+    'the $30 already handed back is not still fronted'
+  );
+  assertSettles([...rows.values()]);
+
+  const moves = settleUp([...rows.values()]);
+  assert.equal(moves.length, 2, 'one payment each, not one per night');
+  assert.equal(moves.find((m) => m.fromKey === 'casey').cents, 2000);
+});
+
+check('the payer being marked settled changes nothing', () => {
+  // The payer's own row can carry settled, since they plainly do not owe
+  // themselves. Counting it would credit them their own share twice.
+  const rows = byKey(
+    tripBalances([
+      {
+        payerName: 'Jordan',
+        grandCents: 4000,
+        perPerson: [
+          { id: 'a', name: 'Jordan', totalCents: 2000, settled: true },
+          { id: 'b', name: 'Casey', totalCents: 2000 }
+        ]
+      }
+    ])
+  );
+  assert.equal(rows.get('jordan').netCents, 2000);
+  assert.equal(rows.get('jordan').paidCents, 4000);
+  assert.equal(rows.get('casey').netCents, -2000);
+});
+
 console.log(`\n${checks} checks passed.`);

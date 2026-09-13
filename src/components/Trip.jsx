@@ -107,7 +107,12 @@ export default function Trip({ tripId, onExit, onMenu, onOpenSplit, onNewSplit }
           ? r.people.find((p) => p.id === r.receipt.payer_id)?.name || r.receipt.payer_name
           : r.receipt.payer_name,
         grandCents: r.split.grandCents,
-        perPerson: r.split.perPerson
+        // settled lives on the rs_people row, not in the arithmetic, so the
+        // two are joined here before the trip nets anything.
+        perPerson: r.split.perPerson.map((p) => ({
+          ...p,
+          settled: Boolean(r.people.find((q) => q.id === p.id)?.settled)
+        }))
       }))
     );
     // Handles come off the people rows. A later split wins, so updating your

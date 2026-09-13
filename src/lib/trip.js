@@ -26,14 +26,34 @@ export function tripBalances(splits) {
   };
 
   for (const split of splits || []) {
+    const payerKey = personKey(split.payerName);
+    let reimbursedCents = 0;
+
     for (const person of split.perPerson || []) {
       const row = touch(person.name);
-      if (row) row.owedCents += person.totalCents || 0;
+      if (!row) continue;
+      row.owedCents += person.totalCents || 0;
+      // Somebody marked paid on one split has already handed that share over.
+      // The trip has to see it. Without this the netting counts the same money
+      // twice: Casey pays for Friday in cash, gets marked paid, and the trip
+      // page still lists her share and tells the payer to collect it again at
+      // the end of the weekend.
+      //
+      // The payer is never reimbursing themselves, so their own row is skipped
+      // whatever it says.
+      if (person.settled && row.key !== payerKey) {
+        row.paidCents += person.totalCents || 0;
+        reimbursedCents += person.totalCents || 0;
+      }
     }
+
     const payer = touch(split.payerName);
     // With nobody named as payer the money is still owed, it just has no
-    // counterparty, so it shows as owed with nothing paid against it.
-    if (payer) payer.paidCents += split.grandCents || 0;
+    // counterparty, so it shows as owed with nothing paid against it. Anything
+    // already handed back comes off what the payer is still out of pocket, so
+    // paidCents reads as cash currently fronted rather than what the card rang
+    // up.
+    if (payer) payer.paidCents += (split.grandCents || 0) - reimbursedCents;
   }
 
   const rows = [...seen.values()];
