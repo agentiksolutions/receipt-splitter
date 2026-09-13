@@ -320,7 +320,10 @@ export default function Landing({ onOpen, onMenu, intent, only = 'all' }) {
     </header>
   );
 
-  if (!hasHistory) {
+  // The marketing page is the answer to an empty Home, not to an empty Trips.
+  // Tapping Trips and being shown the hero again reads as the button doing
+  // nothing.
+  if (!hasHistory && only !== 'trips') {
     return (
       <div className="col market-col plain">
         {bar}
