@@ -304,6 +304,8 @@ select {
 .inline > .price { flex: none; width: 96px; text-align: right; }
 
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.head-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 
 /* ---------- avatars -------------------------------------------------- */
 
@@ -449,6 +451,9 @@ select {
 .splash { padding: 14px 0 22px; }
 
 .recent { display: flex; flex-direction: column; gap: 10px; }
+.recent-item { display: flex; flex-direction: column; }
+.row-actions { display: flex; gap: 4px; padding: 4px 6px 0; }
+.row-actions .btn { padding: 6px 10px; }
 
 .recent-card {
   display: block;
@@ -795,3 +800,67 @@ select {
   .mk-brands { grid-template-columns: repeat(4, 1fr); }
   .mk-brand { font-size: 13px; gap: 7px; padding: 0 8px; }
 }
+
+/* ---------- amount field with a dollar or percent unit --------------- */
+
+.amount-row { display: flex; gap: 8px; align-items: stretch; }
+.amount-row > input { flex: 1; min-width: 0; }
+
+.seg.unit { flex: none; width: 88px; padding: 3px; }
+.seg.unit button { min-height: 42px; font-size: 15px; font-weight: 600; }
+.seg.unit button[disabled] { opacity: 0.35; cursor: default; }
+
+.amount .result { margin-top: 6px; font-size: 13px; font-weight: 500; color: var(--muted); }
+
+/* ---------- side menu ------------------------------------------------- */
+
+.sheet-wrap { position: fixed; inset: 0; z-index: 60; pointer-events: none; }
+.sheet-wrap.open { pointer-events: auto; }
+
+.sheet-veil {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(15, 23, 42, 0.45);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.sheet-wrap.open .sheet-veil { opacity: 1; }
+
+.sheet {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(320px, 86vw);
+  padding: 12px 12px 24px;
+  background: var(--canvas);
+  border-left: 1px solid var(--line);
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.16);
+  transform: translateX(100%);
+  transition: transform 200ms ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sheet-wrap.open .sheet { transform: translateX(0); }
+
+.sheet-x { align-self: flex-end; }
+
+.sheet-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  padding: 16px 12px;
+  min-height: 56px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.sheet-row:active { background: var(--sunken); }

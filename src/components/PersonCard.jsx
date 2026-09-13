@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { fromCents, money } from '../lib/money.js';
 import { buildPaymentLinks, buildShareLinks } from '../lib/pay.js';
+import { canShareFiles } from '../lib/statement-pdf.js';
 import Qr from './Qr.jsx';
 import { Avatar, BRANDS, IconCheck, IconChevron } from './ui.jsx';
 
-const METHODS = ['Venmo', 'Cash App', 'Zelle', 'Apple Pay', 'Cash'];
+// Probed once. This renders per person, and building a File on every card of a
+// long split is exactly the per-item work that made the old build stutter.
+const CAN_SHARE_FILES = canShareFiles();
+
+const METHODS = ['Venmo', 'Cash App', 'Zelle', 'Apple Cash', 'Cash'];
 
 const HANDLES = [
   { key: 'venmo', label: 'Venmo username', type: 'text' },
@@ -14,12 +19,18 @@ const HANDLES = [
   { key: 'email', label: 'Email', type: 'email' }
 ];
 
-export default function PersonCard({ person, share, title, shareUrl, payerName, onSaveField, onSettle }) {
+export default function PersonCard({ person, share, title, shareUrl, payerName, onSaveField, onSettle, onPdf }) {
   const [mode, setMode] = useState('request');
   const [method, setMethod] = useState(person.settled_via || 'Venmo');
   const [showQr, setShowQr] = useState(false);
   const [showItems, setShowItems] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const venmoTimer = useRef(null);
+
+  // The fallback fires 1.2s after we try the app scheme. Marking someone paid
+  // collapses this card, so the timer has to die with it or it navigates the
+  // page out from under whoever is still here.
+  useEffect(() => () => clearTimeout(venmoTimer.current), []);
 
   if (person.settled) {
     return (
@@ -44,6 +55,20 @@ export default function PersonCard({ person, share, title, shareUrl, payerName, 
   }
 
   const links = buildPaymentLinks(person, share.totalCents, mode, title);
+  const touch = typeof window !== 'undefined' && window.matchMedia('(hover: none)').matches;
+
+  // On a phone, try to open the Venmo app first. If it opened, the page is
+  // hidden by the time the timer runs and we leave it alone. If it did not,
+  // we send them to venmo.com with the same amount and note.
+  function openVenmo(e) {
+    if (!touch || !links.venmoApp) return;
+    e.preventDefault();
+    clearTimeout(venmoTimer.current);
+    venmoTimer.current = setTimeout(() => {
+      if (document.visibilityState === 'visible') window.location.href = links.venmo;
+    }, 1200);
+    window.location.href = links.venmoApp;
+  }
   const shareLinks = buildShareLinks({ ...share, phone: person.phone, email: person.email }, title);
   const qrValue = links.venmo || shareUrl;
 
@@ -60,7 +85,7 @@ export default function PersonCard({ person, share, title, shareUrl, payerName, 
 
       <button className="disclose" onClick={() => setShowItems((v) => !v)} aria-expanded={showItems}>
         <IconChevron open={showItems} />
-        {showItems ? 'Hide the items' : `Show the ${share.lines.length} ${share.lines.length === 1 ? 'item' : 'items'}`}
+        {showItems ? 'Hide items' : `Show items (${share.lines.length})`}
       </button>
 
       {showItems && (
@@ -105,6 +130,7 @@ export default function PersonCard({ person, share, title, shareUrl, payerName, 
               target={href && href.startsWith('http') ? '_blank' : undefined}
               rel="noreferrer"
               aria-disabled={href ? undefined : 'true'}
+              onClick={key === 'venmo' && href ? openVenmo : undefined}
             >
               <Mark />
               {label}
@@ -113,14 +139,24 @@ export default function PersonCard({ person, share, title, shareUrl, payerName, 
         })}
       </div>
 
-      <div className="two" style={{ marginTop: 8 }}>
+      <p className="tiny">
+        Zelle and Apple Cash cannot take an amount from a link, so those open a text with the amount in it.
+      </p>
+
+      <div className="three" style={{ marginTop: 8 }}>
         <a className="btn outline sm" href={shareLinks.text}>
-          Text the breakdown
+          Text
         </a>
         <a className="btn outline sm" href={shareLinks.email}>
-          Email the breakdown
+          Email
         </a>
+        <button className="btn outline sm" onClick={onPdf}>
+          Send PDF
+        </button>
       </div>
+      {!CAN_SHARE_FILES && (
+        <p className="tiny">An email link cannot carry an attachment, so Send PDF downloads the file instead.</p>
+      )}
 
       <button className="disclose" onClick={() => setShowQr((v) => !v)} aria-expanded={showQr}>
         <IconChevron open={showQr} />
@@ -132,8 +168,8 @@ export default function PersonCard({ person, share, title, shareUrl, payerName, 
           <Qr value={qrValue} size={168} alt={'Payment code for ' + person.name} />
           <p className="tiny" style={{ textAlign: 'center' }}>
             {links.venmo
-              ? `Scan to open Venmo with $${fromCents(share.totalCents)} already filled in.`
-              : 'Scan to open this split. Add a Venmo username to turn this into a payment code.'}
+              ? `Scan to pay $${fromCents(share.totalCents)} with Venmo.`
+              : 'Scan to open this split. Add a Venmo username for a payment code.'}
           </p>
         </div>
       )}
@@ -157,10 +193,6 @@ export default function PersonCard({ person, share, title, shareUrl, payerName, 
               />
             </label>
           ))}
-          <p className="tiny">
-            Venmo and Cash App carry the amount in the link. Zelle and Apple Pay cannot, so those open a text with
-            the amount written into it.
-          </p>
         </div>
       )}
 
@@ -177,7 +209,7 @@ export default function PersonCard({ person, share, title, shareUrl, payerName, 
           ))}
         </select>
         <button className="btn soft" onClick={() => onSettle(person.id, true, method)}>
-          Mark paid
+          Mark as paid
         </button>
       </div>
     </div>

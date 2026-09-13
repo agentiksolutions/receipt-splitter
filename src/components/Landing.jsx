@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { splitReceipt, money } from '../lib/money.js';
-import { historyIds, remember, forget } from '../lib/history.js';
-import { AvatarStack, BRANDS, IconCheck, Progress, Wordmark } from './ui.jsx';
+import { archive, archivedIds, forget, historyIds, remember, unarchive } from '../lib/history.js';
+import { AvatarStack, BRANDS, IconBack, IconCheck, IconChevron, IconMenu, Progress, Wordmark } from './ui.jsx';
 import { Mark } from './Logo.jsx';
 
 // Local calendar date. toISOString would hand back tomorrow after 8pm Eastern.
@@ -23,17 +23,19 @@ export function prettyDate(iso) {
 
 const RECENT_LIMIT = 12;
 
-export default function Landing({ onOpen }) {
+export default function Landing({ onOpen, onMenu, intent }) {
   const [splits, setSplits] = useState(null);
+  const [showArchive, setShowArchive] = useState(false);
   const [naming, setNaming] = useState(false);
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(today);
-  const [payer, setPayer] = useState('Me');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const ids = historyIds().slice(0, RECENT_LIMIT);
+    const filed = new Set(archivedIds());
+    const active = historyIds().filter((id) => !filed.has(id)).slice(0, RECENT_LIMIT);
+    const ids = [...active, ...historyIds().filter((id) => filed.has(id))];
     if (!ids.length) {
       setSplits([]);
       return;
@@ -69,8 +71,15 @@ export default function Landing({ onOpen }) {
           const receipt = byId.get(id);
           const mine = itemRows.filter((i) => i.receipt_id === id);
           const crowd = peopleRows.filter((p) => p.receipt_id === id);
-          const owing = crowd.filter((p) => p.name !== (receipt.payer_name || '').trim());
+          // The payer is stored as free text, so it only counts when exactly one
+          // person on the split carries that name. An older receipt naming
+          // somebody who was never added has no payer, and everybody owes.
+          const wanted = (receipt.payer_name || '').trim();
+          const matches = wanted ? crowd.filter((p) => p.name === wanted) : [];
+          const payerId = matches.length === 1 ? matches[0].id : null;
+          const owing = crowd.filter((p) => p.id !== payerId);
           return {
+            archived: filed.has(id),
             receipt,
             people: crowd,
             owing: owing.length,
@@ -91,30 +100,48 @@ export default function Landing({ onOpen }) {
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (intent === 'new') setNaming(true);
+    if (intent === 'archived') {
+      setShowArchive(true);
+      // Waits a frame so the section exists before we scroll to it.
+      requestAnimationFrame(() => document.getElementById('archived')?.scrollIntoView({ behavior: 'smooth' }));
+    }
+  }, [intent]);
+
+  async function removeSplit(id) {
+    if (!window.confirm('Delete this split for everyone who has the link?')) return;
+    const { error: e } = await supabase.from('rs_receipts').delete().eq('id', id);
+    if (e) {
+      setError(e.message);
+      return;
+    }
+    forget(id);
+    load();
+  }
+
+  function fileAway(id, put) {
+    if (put) archive(id);
+    else unarchive(id);
+    load();
+  }
+
+  // Who paid is chosen on the settle screen, from the people already added, so
+  // nothing here writes payer_name and nobody is added to the split yet.
   async function create() {
     setBusy(true);
     setError(null);
-    const name = payer.trim() || 'Me';
     const { data, error: e } = await supabase
       .from('rs_receipts')
       .insert({
         title: title.trim() || "Dinner at Joe's",
-        event_date: date || today(),
-        payer_name: name
+        event_date: date || today()
       })
       .select()
       .single();
-    if (e) {
-      setBusy(false);
-      setError(e.message);
-      return;
-    }
-    // The payer is matched by name text, so the person row and payer_name have
-    // to be the same bytes. Written here, once, from the same variable.
-    const p = await supabase.from('rs_people').insert({ receipt_id: data.id, name });
     setBusy(false);
-    if (p.error) {
-      setError(p.error.message);
+    if (e) {
+      setError(e.message);
       return;
     }
     remember(data.id);
@@ -130,16 +157,18 @@ export default function Landing({ onOpen }) {
         <Progress step={1} />
         <div className="step">
           <div className="step-head">
+            <button className="btn ghost sm" style={{ padding: 0, marginBottom: 2 }} onClick={() => setNaming(false)}>
+              <IconBack /> Back
+            </button>
             <p className="step-count">Step 1 of 5</p>
             <h1>What do you want to go halfsies on?</h1>
-            <p className="sub">Give it a name and a date so you can find it later.</p>
           </div>
 
           {error && <p className="banner bad">{error}</p>}
 
           <div className="card">
             <label className="field">
-              <span>What was it</span>
+              <span>Name</span>
               <input
                 type="text"
                 value={title}
@@ -152,65 +181,99 @@ export default function Landing({ onOpen }) {
               <span>Date</span>
               <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </label>
-            <label className="field">
-              <span>Who paid</span>
-              <input
-                type="text"
-                value={payer}
-                placeholder="Me"
-                onChange={(e) => setPayer(e.target.value)}
-              />
-            </label>
           </div>
-          <p className="tiny">Whoever paid gets added to the split, and everyone else settles up with them.</p>
         </div>
 
         <div className="dock">
           <button className="btn primary wide tall" onClick={create} disabled={busy}>
-            {busy ? 'Setting up' : 'Continue'}
+            {busy ? 'Saving' : 'Continue'}
           </button>
         </div>
       </div>
     );
   }
 
-  // Nothing on this device means nobody has used the app yet, so the page is
-  // the pitch. Once there is history the list comes first and keeps the dock it
-  // has always had, and the pitch sits underneath it.
-  //
-  // Loading counts as having history on purpose. historyIds is a synchronous
-  // localStorage read, so an empty device is already settled on the first
-  // paint, and a device with splits would otherwise flash the whole marketing
-  // page and then have the list shoved in above it.
-  const showRecent = splits === null || splits.length > 0;
+  // The pitch shows only on a device that has never made a split. After that
+  // home is the app itself. historyIds is a synchronous localStorage read, so
+  // this is settled on the first paint and nothing flashes.
+  const hasHistory = historyIds().length > 0;
+  const live = (splits || []).filter((t) => !t.archived);
+  const filed = (splits || []).filter((t) => t.archived);
+
+  const bar = (
+    <header className="topbar">
+      <Wordmark onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} />
+      <button className="icon-btn" onClick={onMenu} aria-label="Menu">
+        <IconMenu />
+      </button>
+    </header>
+  );
+
+  if (!hasHistory) {
+    return (
+      <div className="col market-col plain">
+        {bar}
+        {error && <p className="banner bad">{error}</p>}
+        <Marketing onStart={() => setNaming(true)} />
+      </div>
+    );
+  }
 
   return (
-    <div className={'col market-col' + (showRecent ? '' : ' plain')}>
-      <header className="topbar">
-        <Wordmark onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} />
-      </header>
+    <div className="col">
+      {bar}
 
       {error && <p className="banner bad">{error}</p>}
 
-      {showRecent && (
-        <>
-          <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
-          <RecentList splits={splits} onOpen={onOpen} />
-          <div className="dock">
-            <button className="btn primary wide tall" onClick={() => setNaming(true)}>
-              New split
-            </button>
-          </div>
-        </>
+      <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
+      <RecentList
+        splits={splits === null ? null : live}
+        onOpen={onOpen}
+        onArchive={(id) => fileAway(id, true)}
+        onDelete={removeSplit}
+      />
+
+      {filed.length > 0 && (
+        <section id="archived" style={{ marginTop: 22 }}>
+          <button className="disclose" onClick={() => setShowArchive((v) => !v)} aria-expanded={showArchive}>
+            <IconChevron open={showArchive} />
+            Archived ({filed.length})
+          </button>
+          {showArchive && (
+            <RecentList splits={filed} onOpen={onOpen} onUnarchive={(id) => fileAway(id, false)} onDelete={removeSplit} />
+          )}
+        </section>
       )}
 
-      <Marketing onStart={() => setNaming(true)} />
+      <div className="dock">
+        <button className="btn primary wide tall" onClick={() => setNaming(true)}>
+          New split
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The same pitch, reachable from the menu once the device has splits of its own.
+export function HowPage({ onStart, onHome, onMenu }) {
+  return (
+    <div className="col market-col plain">
+      <header className="topbar">
+        <Wordmark onClick={onHome} />
+        <button className="icon-btn" onClick={onMenu} aria-label="Menu">
+          <IconMenu />
+        </button>
+      </header>
+      <Marketing onStart={onStart} />
+      <button className="btn primary wide tall" style={{ marginTop: 8 }} onClick={onStart}>
+        Start a split
+      </button>
     </div>
   );
 }
 
 const STEPS = [
-  ['Snap the receipt', 'The lines are read off the photo. No receipt? Type them in.'],
+  ['Take a photo of the receipt', 'The lines are read off the photo. No receipt? Type them in.'],
   ['Tap who had what', "Shared plates split evenly. Tax and tip follow each person's share."],
   ['Send the link', 'Each person sees what they owe and a button to pay you. No app to download.']
 ];
@@ -229,7 +292,7 @@ function Marketing({ onStart }) {
         <h1>When your math isn't mathing, go halfsies.</h1>
         <p>
           Take a photo of the receipt, tap who had what, and everyone gets their number with tax and tip included.
-          Then they pay you with Venmo, Cash App, Zelle or Apple Pay.
+          Then they pay you with Venmo, Cash App, Zelle or Apple Cash.
         </p>
         <button className="btn tall" onClick={onStart}>
           Start a split
@@ -310,11 +373,11 @@ function SettleMock() {
         <div className="card">
           <div className="owed">
             <span className="av" style={{ background: '#2563eb' }}>
-              L
+              C
             </span>
             <span className="grow">
-              <span className="who-name">Lee</span>
-              <span className="owes">owes Phil</span>
+              <span className="who-name">Casey</span>
+              <span className="owes">owes Jordan</span>
             </span>
             <span className="big num">$24.18</span>
           </div>
@@ -332,7 +395,7 @@ function SettleMock() {
               <IconCheck />
             </span>
             <span className="grow">
-              <span className="who-name">Sam</span>
+              <span className="who-name">Riley</span>
               <span className="owes">Paid by Cash</span>
             </span>
             <span className="num" style={{ fontWeight: 600 }}>
@@ -345,17 +408,17 @@ function SettleMock() {
   );
 }
 
-function RecentList({ splits, onOpen }) {
+function RecentList({ splits, onOpen, onArchive, onUnarchive, onDelete }) {
   const rows = useMemo(() => splits || [], [splits]);
 
   if (splits === null) return <p className="empty">Loading</p>;
-  if (!rows.length) return <p className="empty">Your splits show up here once you start one.</p>;
+  if (!rows.length) return <p className="empty">No splits yet.</p>;
 
   return (
     <div className="recent">
       {rows.map((t) => (
+        <div className="recent-item" key={t.receipt.id}>
         <a
-          key={t.receipt.id}
           className="recent-card"
           href={'?receipt=' + t.receipt.id}
           onClick={(e) => {
@@ -381,6 +444,21 @@ function RecentList({ splits, onOpen }) {
             )}
           </div>
         </a>
+        <div className="row-actions">
+          {onUnarchive ? (
+            <button className="btn ghost sm" onClick={() => onUnarchive(t.receipt.id)}>
+              Unarchive
+            </button>
+          ) : (
+            <button className="btn ghost sm" onClick={() => onArchive(t.receipt.id)}>
+              Archive
+            </button>
+          )}
+          <button className="btn ghost sm" onClick={() => onDelete(t.receipt.id)}>
+            Delete
+          </button>
+        </div>
+        </div>
       ))}
     </div>
   );

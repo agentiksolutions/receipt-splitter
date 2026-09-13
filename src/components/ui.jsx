@@ -86,6 +86,18 @@ export const IconShare = () => (
   </svg>
 );
 
+export const IconMenu = () => (
+  <svg {...stroke}>
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </svg>
+);
+
+export const IconClose = () => (
+  <svg {...stroke}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);
+
 export const IconBack = () => (
   <svg {...stroke}>
     <path d="M15 5l-7 7 7 7" />
@@ -107,6 +119,21 @@ export const IconCheck = () => (
 export const IconPlus = () => (
   <svg {...stroke}>
     <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const IconUsers = () => (
+  <svg {...stroke}>
+    <circle cx="9.5" cy="8.5" r="3.2" />
+    <path d="M3.5 19.5c0-3 2.7-4.8 6-4.8s6 1.8 6 4.8" />
+    <path d="M16.2 6.1a3.2 3.2 0 0 1 0 5.6M17.5 15.2c2 .6 3.3 2.1 3.3 4.3" />
+  </svg>
+);
+
+export const IconList = () => (
+  <svg {...stroke}>
+    <path d="M9 7h11M9 12h11M9 17h11" />
+    <path d="M4.5 7h.01M4.5 12h.01M4.5 17h.01" />
   </svg>
 );
 
@@ -149,7 +176,7 @@ export const BRANDS = [
   { key: 'venmo', label: 'Venmo', Mark: MarkVenmo },
   { key: 'cashapp', label: 'Cash App', Mark: MarkCashApp },
   { key: 'zelle', label: 'Zelle', Mark: MarkZelle },
-  { key: 'applepay', label: 'Apple Pay', Mark: MarkApplePay }
+  { key: 'applepay', label: 'Apple Cash', Mark: MarkApplePay }
 ];
 
 /* ---- shell ---- */

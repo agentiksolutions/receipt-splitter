@@ -1,29 +1,74 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { money, toCents } from '../lib/money.js';
-import { Avatar, IconBack } from './ui.jsx';
+import { Avatar, IconBack, IconList, IconUsers, Mark } from './ui.jsx';
 import ItemsStep from './ItemsStep.jsx';
 
 export default function AssignStep(props) {
   const { people, items, claimed, split, payer, api, onNext, onBack, embedded } = props;
   const open = split.unassignedItems.length;
   const assigned = items.length - open;
+  const [picked, setPicked] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  // The three cards are the way in. Once anything is assigned they step aside,
+  // because the split already has a shape and the list is what you want.
+  const showModes = items.length > 0 && assigned === 0 && picked !== 'byitem';
+  const showList = items.length > 0 && (embedded || assigned > 0 || picked === 'byitem');
+
+  async function assignToEveryone() {
+    setBusy(true);
+    await api.splitEvenly();
+    setBusy(false);
+    onNext?.();
+  }
+
+  const modes = (
+    <div style={{ marginBottom: 12 }}>
+      {people.length === 2 && (
+        <button className="choice" onClick={assignToEveryone} disabled={busy}>
+          <span className="glyph">
+            <Mark size={24} />
+          </span>
+          <span className="t">
+            <b>Halfsies</b>
+            <span>Every item split between the two of you</span>
+          </span>
+        </button>
+      )}
+
+      <button className="choice" onClick={assignToEveryone} disabled={busy}>
+        <span className="glyph">
+          <IconUsers />
+        </span>
+        <span className="t">
+          <b>Split evenly</b>
+          <span>Every item split between everyone</span>
+        </span>
+      </button>
+
+      <button className="choice" onClick={() => setPicked('byitem')} disabled={busy}>
+        <span className="glyph">
+          <IconList />
+        </span>
+        <span className="t">
+          <b>By what each person had</b>
+          <span>Tap the people who had each item</span>
+        </span>
+      </button>
+    </div>
+  );
 
   const list = (
     <>
-      {items.length > 1 && (
-        <div className="two" style={{ marginBottom: 12 }}>
-          <button className="btn outline" onClick={api.splitEvenly}>
-            Split everything evenly
-          </button>
-          <button className="btn outline" onClick={api.restToPayer} disabled={!payer || !open}>
-            Rest to {payer ? payer.name : 'the payer'}
-          </button>
-        </div>
+      {payer && open > 0 && items.length > 1 && (
+        <button className="btn outline wide" style={{ marginBottom: 12 }} onClick={api.restToPayer}>
+          Rest to {payer.name}
+        </button>
       )}
 
-      {items.length === 0 && <p className="empty">No items yet. Add them below.</p>}
+      {items.length === 0 && <p className="empty">No items yet.</p>}
 
-      {items.length > 0 && (
+      {showList && (
         <div className="card flush">
           <div className="rows">
             {items.map((it) => {
@@ -69,6 +114,7 @@ export default function AssignStep(props) {
   if (embedded) {
     return (
       <>
+        {showModes && modes}
         {list}
         <details className="card" style={{ marginTop: 12 }}>
           <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 15 }}>Add items, tax and tip</summary>
@@ -87,9 +133,10 @@ export default function AssignStep(props) {
           <IconBack /> Back
         </button>
         <p className="step-count">Step 4 of 5</p>
-        <h1>Who had what</h1>
-        <p className="sub">Tap a name on every line. Tap again to take it back off.</p>
+        <h1>{showModes ? 'How do you want to split it?' : 'Who had what'}</h1>
+        <p className="sub">{showModes ? 'Pick one.' : 'Tap the people who had each item.'}</p>
       </div>
+      {showModes && modes}
       {list}
       <div className="dock">
         <div className="meter">

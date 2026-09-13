@@ -51,9 +51,9 @@ function reconciles(result, label) {
 }
 
 const people = [
-  { id: 'a', name: 'Phil' },
-  { id: 'b', name: 'Lee' },
-  { id: 'c', name: 'Dana' }
+  { id: 'a', name: 'Jordan' },
+  { id: 'b', name: 'Casey' },
+  { id: 'c', name: 'Riley' }
 ];
 
 check('cents parsing survives float noise', () => {
@@ -174,7 +174,7 @@ check('with nothing assigned, tax and tip are reported unallocated', () => {
 
 check('an assignment to a removed person is ignored', () => {
   const r = splitReceipt({
-    people: [{ id: 'a', name: 'Phil' }],
+    people: [{ id: 'a', name: 'Jordan' }],
     items: [{ id: 'i1', name: 'Shared', price: 9.0 }],
     assignments: [
       { item_id: 'i1', person_id: 'a' },

@@ -2,7 +2,8 @@ import React, { useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { fromCents, money, splitEvenCents, toCents } from '../lib/money.js';
 import { prepare } from '../lib/photo.js';
-import { IconBack, IconCamera, IconPlus, IconType } from './ui.jsx';
+import AmountField from './AmountField.jsx';
+import { IconBack, IconCamera, IconList, IconPlus, IconType } from './ui.jsx';
 
 const SAMPLE = [
   ['Bubly 12z 8pk', 3.97], ['Bubly 12z 8pk', 3.97], ['Applewood bacon', 9.12],
@@ -44,14 +45,14 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
   const [mode, setMode] = useState(items.length ? 'type' : 'choose');
   const [preview, setPreview] = useState(receipt.photo_url || null);
   const [draft, setDraft] = useState([]);
-  const [draftTax, setDraftTax] = useState('');
-  const [draftTip, setDraftTip] = useState('');
-  const [merchant, setMerchant] = useState(null);
+  const [draftTaxCents, setDraftTaxCents] = useState(0);
+  const [draftTipCents, setDraftTipCents] = useState(0);
   const [note, setNote] = useState(null);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [bulk, setBulk] = useState('');
+  const [totalRaw, setTotalRaw] = useState('');
   const nameRef = useRef(null);
 
   async function onFile(e) {
@@ -78,14 +79,13 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
     });
 
     if (error || !data || data.error || !data.items?.length) {
-      setNote('The reader could not pull the lines off that photo, so type them in below.');
+      setNote('Could not read that photo. Type the items instead.');
       setMode('type');
       return;
     }
-    setMerchant(data.merchant || null);
     setDraft(expandRead(data.items));
-    setDraftTax(data.tax == null ? '' : fromCents(toCents(data.tax)));
-    setDraftTip(data.tip == null ? '' : fromCents(toCents(data.tip)));
+    setDraftTaxCents(data.tax == null ? 0 : toCents(data.tax));
+    setDraftTipCents(data.tip == null ? 0 : toCents(data.tip));
     setMode('review');
   }
 
@@ -98,14 +98,14 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
       .map((r) => ({ name: r.name.trim(), price: toCents(r.price) / 100 }))
       .filter((r) => r.name);
     if (!rows.length) {
-      setNote('Nothing to add. Every line needs a name.');
+      setNote('Every item needs a name.');
       return;
     }
     setBusy(true);
     const ok = await api.addItems(rows);
     const patch = {};
-    if (draftTax !== '') patch.tax_amount = toCents(draftTax) / 100;
-    if (draftTip !== '') patch.tip_amount = toCents(draftTip) / 100;
+    if (draftTaxCents) patch.tax_amount = draftTaxCents / 100;
+    if (draftTipCents) patch.tip_amount = draftTipCents / 100;
     if (Object.keys(patch).length) await api.patchReceipt(patch);
     setBusy(false);
     if (ok) {
@@ -134,7 +134,7 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
       if (n && isFinite(p)) rows.push({ name: n, price: p });
     }
     if (!rows.length) {
-      setNote('Put one item per line, written as name, price.');
+      setNote('One item per line, as name, price.');
       return;
     }
     setBulk('');
@@ -149,17 +149,16 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
   if (mode === 'reading') {
     return (
       <>
-        <Head onBack={onBack} title="The receipt" sub="Hold on while the lines come off the photo." />
+        <Head onBack={onBack} title="Reading the receipt" sub="This takes a few seconds." />
         <div className="card">
           <div className="reading">
             {preview && (
               <span className="shot tiny">
-                <img className="thumb" src={preview} alt="The receipt you just took" />
+                <img className="thumb" src={preview} alt="Receipt photo" />
               </span>
             )}
             <div className="t">
-              <b>Reading your receipt</b>
-              <span className="tiny">This takes a few seconds.</span>
+              <b>Reading the receipt</b>
               <div className="track">
                 <i />
               </div>
@@ -168,7 +167,7 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
         </div>
         <div className="dock">
           <button className="btn primary wide tall" disabled>
-            Reading your receipt
+            Reading
           </button>
         </div>
       </>
@@ -180,16 +179,12 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
   if (mode === 'review') {
     return (
       <>
-        <Head
-          onBack={() => setMode('choose')}
-          title="Check the lines"
-          sub={merchant ? `Read from ${merchant}. Fix anything that came out wrong.` : 'Fix anything that came out wrong.'}
-        />
+        <Head onBack={() => setMode('choose')} title="Check the items" sub="Items read from the photo. Fix any mistakes." />
         {note && <p className="banner warn">{note}</p>}
         {preview && (
           <div className="card" style={{ padding: 8 }}>
             <div className="shot">
-              <img className="thumb" src={preview} alt="The receipt you just took" />
+              <img className="thumb" src={preview} alt="Receipt photo" />
             </div>
           </div>
         )}
@@ -214,7 +209,7 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
                 <button
                   className="icon-btn bare"
                   onClick={() => setDraft((prev) => prev.filter((x) => x.key !== r.key))}
-                  aria-label={'Drop ' + r.name}
+                  aria-label={'Remove ' + r.name}
                 >
                   &times;
                 </button>
@@ -226,45 +221,35 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
           className="btn outline wide"
           onClick={() => setDraft((prev) => [...prev, { key: rowKey(), name: '', price: '' }])}
         >
-          <IconPlus /> Add a line
+          <IconPlus /> Add an item
         </button>
 
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="two">
-            <label className="field">
-              <span>Tax</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                className="num"
-                value={draftTax}
-                placeholder="0.00"
-                onChange={(e) => setDraftTax(e.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Tip</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                className="num"
-                value={draftTip}
-                placeholder="0.00"
-                onChange={(e) => setDraftTip(e.target.value)}
-              />
-            </label>
-          </div>
+          <AmountField
+            label="Tax"
+            unitKey="tax"
+            baseCents={draftTotal}
+            cents={draftTaxCents}
+            onChange={setDraftTaxCents}
+          />
+          <AmountField
+            label="Tip"
+            unitKey="tip"
+            baseCents={draftTotal}
+            cents={draftTipCents}
+            onChange={setDraftTipCents}
+          />
         </div>
 
         <div className="dock">
           <div className="meter">
             <span>
-              {draft.length} {draft.length === 1 ? 'line' : 'lines'}
+              {draft.length} {draft.length === 1 ? 'item' : 'items'}
             </span>
             <b className="num">{money(draftTotal)}</b>
           </div>
           <button className="btn primary wide tall" onClick={commitDraft} disabled={busy || !draft.length}>
-            {busy ? 'Adding' : 'Looks right'}
+            {busy ? 'Adding' : 'Add items'}
           </button>
         </div>
       </>
@@ -276,7 +261,7 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
   if (mode === 'choose') {
     return (
       <>
-        <Head onBack={onBack} title="The receipt" sub="Take a photo of it, or type the lines in yourself." />
+        <Head onBack={onBack} title="Add the items" sub="Take a photo of the receipt, or type the items." />
         {note && <p className="banner warn">{note}</p>}
 
         <label className="choice">
@@ -284,8 +269,8 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
             <IconCamera />
           </span>
           <span className="t">
-            <b>Snap the receipt</b>
-            <span>The lines are read off the photo</span>
+            <b>Take a photo of the receipt</b>
+            <span>The items are read from the photo</span>
           </span>
           <input type="file" accept="image/*" capture="environment" onChange={onFile} />
         </label>
@@ -295,8 +280,18 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
             <IconType />
           </span>
           <span className="t">
-            <b>Type it in</b>
-            <span>One line at a time, or paste a list</span>
+            <b>Type the items</b>
+            <span>One at a time, or paste a list</span>
+          </span>
+        </button>
+
+        <button className="choice" onClick={() => setMode('total')}>
+          <span className="glyph">
+            <IconList />
+          </span>
+          <span className="t">
+            <b>Just a total</b>
+            <span>One amount for the whole bill</span>
           </span>
         </button>
 
@@ -318,7 +313,62 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
     );
   }
 
-  /* ---------- type it in ---------- */
+  /* ---------- just a total ---------- */
+
+  if (mode === 'total') {
+    const totalCents = toCents(totalRaw);
+    const label = (receipt.title || '').trim() || 'Bill';
+
+    async function saveTotal() {
+      setBusy(true);
+      await api.addItems([{ name: label, price: totalCents / 100 }]);
+      const patch = {};
+      if (draftTaxCents) patch.tax_amount = draftTaxCents / 100;
+      if (draftTipCents) patch.tip_amount = draftTipCents / 100;
+      if (Object.keys(patch).length) await api.patchReceipt(patch);
+      setBusy(false);
+      onNext?.();
+    }
+
+    return (
+      <>
+        <Head onBack={() => setMode('choose')} title="Just a total" sub={'The whole bill goes on one line, ' + label + '.'} />
+
+        <div className="card">
+          <label className="field">
+            <span>Amount</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              className="num"
+              value={totalRaw}
+              placeholder="0.00"
+              autoFocus
+              onChange={(e) => setTotalRaw(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="card">
+          <AmountField label="Tax" unitKey="tax" baseCents={totalCents} cents={draftTaxCents} onChange={setDraftTaxCents} />
+          <AmountField label="Tip" unitKey="tip" baseCents={totalCents} cents={draftTipCents} onChange={setDraftTipCents} />
+          <p className="tiny">Both are optional.</p>
+        </div>
+
+        <div className="dock">
+          <div className="meter">
+            <span>Total</span>
+            <b className="num">{money(totalCents + draftTaxCents + draftTipCents)}</b>
+          </div>
+          <button className="btn primary wide tall" onClick={saveTotal} disabled={busy || totalCents <= 0}>
+            {busy ? 'Saving' : 'Continue'}
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  /* ---------- type the items ---------- */
 
   const body = (
     <>
@@ -368,43 +418,33 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
       )}
 
       <div className="card">
-        <div className="two">
-          <label className="field">
-            <span>Tax</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              className="num"
-              key={'tax' + String(receipt.tax_amount)}
-              defaultValue={fromCents(toCents(receipt.tax_amount))}
-              onBlur={(e) => {
-                const v = toCents(e.target.value) / 100;
-                if (v !== Number(receipt.tax_amount)) api.patchReceipt({ tax_amount: v });
-              }}
-            />
-          </label>
-          <label className="field">
-            <span>Tip</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              className="num"
-              key={'tip' + String(receipt.tip_amount)}
-              defaultValue={fromCents(toCents(receipt.tip_amount))}
-              onBlur={(e) => {
-                const v = toCents(e.target.value) / 100;
-                if (v !== Number(receipt.tip_amount)) api.patchReceipt({ tip_amount: v });
-              }}
-            />
-          </label>
-        </div>
-        <p className="tiny">Tax and tip get split in proportion to what each person ordered.</p>
+        <AmountField
+          key={'tax' + String(receipt.tax_amount)}
+          label="Tax"
+          unitKey="tax"
+          baseCents={split.itemsCents}
+          cents={toCents(receipt.tax_amount)}
+          onCommit={(c) => {
+            if (c !== toCents(receipt.tax_amount)) api.patchReceipt({ tax_amount: c / 100 });
+          }}
+        />
+        <AmountField
+          key={'tip' + String(receipt.tip_amount)}
+          label="Tip"
+          unitKey="tip"
+          baseCents={split.itemsCents}
+          cents={toCents(receipt.tip_amount)}
+          onCommit={(c) => {
+            if (c !== toCents(receipt.tip_amount)) api.patchReceipt({ tip_amount: c / 100 });
+          }}
+        />
+        <p className="tiny">Tax and tip are split by what each person ordered.</p>
       </div>
 
       <details className="card">
         <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 15 }}>Paste a list</summary>
         <label className="field" style={{ marginTop: 12 }}>
-          <span>One item per line, written as name, price</span>
+          <span>One item per line, as name, price</span>
           <textarea
             value={bulk}
             placeholder={'Bacon, 9.12' + '\n' + 'Potatoes, 4.08'}
@@ -413,7 +453,7 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
         </label>
         <div className="two">
           <button className="btn outline" onClick={addBulk}>
-            Add pasted items
+            Add these items
           </button>
           <button
             className="btn outline"
@@ -432,8 +472,8 @@ export default function ItemsStep({ receipt, items, split, api, onNext, onBack, 
     <>
       <Head
         onBack={items.length ? () => setMode('choose') : onBack}
-        title="The receipt"
-        sub="Add every line, then tax and tip."
+        title="Add the items"
+        sub="Tax and tip are below."
       />
       {body}
       <div className="dock">
@@ -461,7 +501,7 @@ function Head({ onBack, title, sub }) {
       )}
       <p className="step-count">Step 3 of 5</p>
       <h1>{title}</h1>
-      <p className="sub">{sub}</p>
+      {sub && <p className="sub">{sub}</p>}
     </div>
   );
 }

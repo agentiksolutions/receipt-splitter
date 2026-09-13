@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Avatar, IconPlus } from './ui.jsx';
+import { Avatar, IconBack, IconPlus } from './ui.jsx';
 
-export default function PeopleStep({ people, payer, api, onNext, embedded }) {
+export default function PeopleStep({ people, payer, api, onNext, onBack, embedded }) {
   const [name, setName] = useState('');
 
   function add() {
@@ -18,7 +18,7 @@ export default function PeopleStep({ people, payer, api, onNext, embedded }) {
           <input
             type="text"
             value={name}
-            placeholder="Add a name"
+            placeholder="Name"
             autoComplete="off"
             autoFocus={!embedded}
             onChange={(e) => setName(e.target.value)}
@@ -37,27 +37,25 @@ export default function PeopleStep({ people, payer, api, onNext, embedded }) {
         {people.length > 0 && (
           <div className="chips" style={{ marginTop: 14 }}>
             {people.map((p) => {
+              // The payer is picked on the settle screen, so it can be nobody
+              // here. Anyone can still be removed; the picker comes back if the
+              // person it pointed at is gone.
               const isPayer = payer && p.id === payer.id;
               return (
                 <span className={'chip' + (isPayer ? ' payer' : '')} key={p.id}>
                   <Avatar name={p.name} index={p.colorIndex} />
                   {p.name}
-                  {isPayer ? (
-                    <span className="tag">paid</span>
-                  ) : (
-                    <button className="x" onClick={() => api.removePerson(p.id)} aria-label={'Remove ' + p.name}>
-                      &times;
-                    </button>
-                  )}
+                  {isPayer && <span className="tag">paid</span>}
+                  <button className="x" onClick={() => api.removePerson(p.id)} aria-label={'Remove ' + p.name}>
+                    &times;
+                  </button>
                 </span>
               );
             })}
           </div>
         )}
       </div>
-      {people.length < 2 && (
-        <p className="tiny">Add at least one more person. Whoever paid is already on the list.</p>
-      )}
+      {people.length < 2 && <p className="tiny">Add at least two people.</p>}
     </>
   );
 
@@ -66,9 +64,12 @@ export default function PeopleStep({ people, payer, api, onNext, embedded }) {
   return (
     <>
       <div className="step-head">
+        <button className="btn ghost sm" style={{ padding: 0, marginBottom: 2 }} onClick={onBack}>
+          <IconBack /> Back
+        </button>
         <p className="step-count">Step 2 of 5</p>
-        <h1>Who is splitting</h1>
-        <p className="sub">Type a name and press enter. You can add more later.</p>
+        <h1>Add people</h1>
+        <p className="sub">Type a name and press enter.</p>
       </div>
       {card}
       <div className="dock">

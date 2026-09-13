@@ -4,16 +4,17 @@
 //   Venmo     amount and note, for both charge and pay
 //   Cash App  amount, send direction only
 //   Zelle     nothing
-//   Apple Pay nothing
+//   Apple Cash nothing
 // Everything unsupported falls back to a prefilled text with the amount in it.
 
 import { fromCents } from './money.js';
 
-const DEFAULT_LABEL = 'the receipt split';
+const DEFAULT_LABEL = 'the receipt';
 
 export function reasonFor(title) {
   const t = (title || '').trim();
-  if (!t || t.toLowerCase() === 'untitled receipt') return DEFAULT_LABEL;
+  const blank = ['untitled receipt', 'untitled split'];
+  if (!t || blank.includes(t.toLowerCase())) return DEFAULT_LABEL;
   return t;
 }
 
@@ -28,7 +29,7 @@ const clean = (handle) => (handle || '').trim().replace(/^[@$]/, '');
  * @param {number} cents    what they owe
  * @param {'request'|'send'} mode
  * @param {string} title    receipt title, used as the note
- * @returns {{venmo:?string, cashapp:?string, zelle:?string, applepay:string, note:string}}
+ * @returns {{venmo:?string, venmoApp:?string, cashapp:?string, zelle:?string, applepay:string}}
  */
 export function buildPaymentLinks(person, cents, mode, title) {
   const amount = fromCents(cents);
@@ -38,13 +39,20 @@ export function buildPaymentLinks(person, cents, mode, title) {
   const zelle = (person.zelle || '').trim();
   const phone = (person.phone || '').trim();
 
-  const links = { venmo: null, cashapp: null, zelle: null, applepay: null };
+  const links = { venmo: null, venmoApp: null, cashapp: null, zelle: null, applepay: null };
 
   if (venmo) {
     const txn = mode === 'request' ? 'charge' : 'pay';
     links.venmo =
       `https://venmo.com/${encodeURIComponent(venmo)}` +
       `?txn=${txn}&amount=${amount}&note=${encodeURIComponent(reason)}`;
+    // The app scheme opens Venmo itself with the amount already filled in. The
+    // https link above is the href and the fallback, so a desktop browser and a
+    // phone without Venmo installed both still land somewhere useful.
+    links.venmoApp =
+      `venmo://paycharge?txn=${txn}` +
+      `&recipients=${encodeURIComponent(venmo)}` +
+      `&amount=${amount}&note=${encodeURIComponent(reason)}`;
   }
 
   if (cashtag) {
@@ -66,8 +74,8 @@ export function buildPaymentLinks(person, cents, mode, title) {
   links.applepay = sms(
     phone,
     mode === 'request'
-      ? `Can you Apple Pay me $${amount} for ${reason}?`
-      : `Sending you $${amount} by Apple Pay for ${reason}.`
+      ? `Can you Apple Cash me $${amount} for ${reason}?`
+      : `Sending you $${amount} by Apple Cash for ${reason}.`
   );
 
   return links;

@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { remember } from '../lib/history.js';
+import { forget, remember } from '../lib/history.js';
 import { splitReceipt, money } from '../lib/money.js';
-import { IconShare, Progress, Wordmark } from './ui.jsx';
+import { IconBack, IconMenu, IconShare, Progress, Wordmark } from './ui.jsx';
 import PeopleStep from './PeopleStep.jsx';
 import ItemsStep from './ItemsStep.jsx';
 import AssignStep from './AssignStep.jsx';
@@ -35,7 +35,7 @@ const TABS = [
   ['settle', 'Settle']
 ];
 
-export default function Receipt({ receiptId, startWizard, onExit }) {
+export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
   const [receipt, setReceipt] = useState(null);
   const [people, setPeople] = useState([]);
   const [items, setItems] = useState([]);
@@ -179,9 +179,12 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
 
   // payer_name is free text, so a rename or a duplicate name can leave it
   // pointing at nobody. Only treat it as a person when exactly one matches.
-  const payerName = (receipt?.payer_name || '').trim();
-  const payerMatches = crowd.filter((p) => p.name === payerName);
+  const storedPayer = (receipt?.payer_name || '').trim();
+  const payerMatches = storedPayer ? crowd.filter((p) => p.name === storedPayer) : [];
   const payer = payerMatches.length === 1 ? payerMatches[0] : null;
+  // Every screen reads the resolved person, never the raw column, so a name
+  // left on an older receipt that matches nobody counts as no payer at all.
+  const payerName = payer ? payer.name : '';
 
   const unassignedCount = split.unassignedItems.length;
 
@@ -282,6 +285,10 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
     return bulkAssign(rows);
   }, [items, crowd, bulkAssign]);
 
+  // Picked on the settle screen. Stored as the person's name because the table
+  // has a payer_name column and no payer_id.
+  const setPayer = useCallback((person) => patchReceipt({ payer_name: person.name }), [patchReceipt]);
+
   const restToPayer = useCallback(() => {
     if (!payer) return;
     return bulkAssign(split.unassignedItems.map((it) => ({ item_id: it.id, person_id: payer.id })));
@@ -378,8 +385,8 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
           <Wordmark onClick={onExit} />
         </header>
         <div className="step">
-          <h1>No split here</h1>
-          <p className="sub">That link points at a split that does not exist, or one that has been deleted.</p>
+          <h1>Split not found</h1>
+          <p className="sub">This split does not exist, or it was deleted.</p>
           <button className="btn primary wide tall" style={{ marginTop: 20 }} onClick={onExit}>
             Back to my splits
           </button>
@@ -388,10 +395,22 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
     );
   }
 
+  async function deleteSplit() {
+    if (!window.confirm('Delete this split for everyone who has the link?')) return;
+    const { error: e } = await supabase.from('rs_receipts').delete().eq('id', receiptId);
+    if (e) {
+      setError(e.message);
+      return;
+    }
+    forget(receiptId);
+    onExit();
+  }
+
   const shared = {
     receipt,
     people: crowd,
     items,
+    assignments,
     claimed,
     split,
     byPerson,
@@ -408,6 +427,7 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
       toggleAssign,
       splitEvenly,
       restToPayer,
+      setPayer,
       savePersonField,
       setSettled,
       savePhoto
@@ -427,6 +447,9 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
       <button className="icon-btn" onClick={shareSplit} aria-label="Share this split">
         <IconShare />
       </button>
+      <button className="icon-btn" onClick={onMenu} aria-label="Menu">
+        <IconMenu />
+      </button>
     </header>
   );
 
@@ -437,10 +460,10 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
         <Progress step={view.step} />
         {banner}
         <div className="step" key={view.step}>
-          {view.step === 2 && <PeopleStep {...shared} onNext={() => goStep(3)} onBack={() => goStep(2)} />}
+          {view.step === 2 && <PeopleStep {...shared} onNext={() => goStep(3)} onBack={onExit} />}
           {view.step === 3 && <ItemsStep {...shared} onNext={() => goStep(4)} onBack={() => goStep(2)} />}
           {view.step === 4 && <AssignStep {...shared} onNext={() => goStep(5)} onBack={() => goStep(3)} />}
-          {view.step === 5 && <SettleStep {...shared} onDone={() => goStep(6)} onBack={() => goStep(4)} />}
+          {view.step === 5 && <SettleStep {...shared} onDone={() => goStep(6)} onBack={() => goStep(4)} onDelete={deleteSplit} />}
         </div>
       </div>
     );
@@ -450,6 +473,9 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
     <div className="col">
       {header}
       <div className="step-head" style={{ marginBottom: 14 }}>
+        <button className="btn ghost sm" style={{ padding: 0, marginBottom: 2 }} onClick={onExit}>
+          <IconBack /> Back
+        </button>
         <h1>{receipt.title || 'Untitled split'}</h1>
         <p className="sub">
           <span className="num">{money(split.grandCents)}</span> across {crowd.length}{' '}
@@ -474,7 +500,7 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
       <div className="step" key={view.tab}>
         {view.tab === 'items' && <AssignStep {...shared} embedded />}
         {view.tab === 'people' && <PeopleStep {...shared} embedded />}
-        {view.tab === 'settle' && <SettleStep {...shared} embedded />}
+        {view.tab === 'settle' && <SettleStep {...shared} embedded onDelete={deleteSplit} />}
       </div>
     </div>
   );
