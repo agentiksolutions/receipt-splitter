@@ -669,6 +669,10 @@ button.chip { font-size: 14px; color: var(--muted); }
    the bottom at the full column width instead of squeezing into a rail. */
 .profile-wrap .sheet.profile {
   top: auto;
+  /* The menu drawer is anchored left, and this shares its base class. Without
+     cancelling that the profile stretches from the left edge to the middle
+     instead of sitting centred over the page. */
+  left: auto;
   right: 50%;
   bottom: 0;
   width: min(var(--col), 100%);
