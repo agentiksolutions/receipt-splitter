@@ -21,11 +21,18 @@ export function money(cents) {
 
 // Hand out `extra` leftover cents one at a time, largest share first.
 // Ties break by original order, so the result is stable across renders.
-function allocateRemainder(shares, extra) {
+//
+// Only somebody who actually ordered can take one. Three people where two split
+// a plate and the tax is a single cent used to hand that cent to the third, who
+// ordered nothing and owed nothing. Filter on the WEIGHT, never on the floored
+// share: a real weight can floor to zero and is still owed its cent.
+function allocateRemainder(shares, extra, weights) {
   const order = shares
     .map((cents, index) => ({ cents, index }))
+    .filter(({ index }) => weights[index] > 0)
     .sort((a, b) => b.cents - a.cents || a.index - b.index);
   const out = shares.slice();
+  if (!order.length) return out;
   for (let i = 0; i < extra; i++) out[order[i % order.length].index] += 1;
   return out;
 }
@@ -37,7 +44,7 @@ function splitProportionally(amountCents, weights) {
   if (amountCents === 0 || totalWeight === 0) return weights.map(() => 0);
   const base = weights.map((w) => Math.floor((amountCents * w) / totalWeight));
   const used = base.reduce((s, c) => s + c, 0);
-  return allocateRemainder(base, amountCents - used);
+  return allocateRemainder(base, amountCents - used, weights);
 }
 
 /**
@@ -118,8 +125,58 @@ export function splitReceipt({ people = [], items = [], assignments = [], taxAmo
     allocatedTipCents,
     unallocatedTaxCents: taxCents - allocatedTaxCents,
     unallocatedTipCents: tipCents - allocatedTipCents,
-    grandCents: assignedCents + allocatedTaxCents + allocatedTipCents
+    grandCents: assignedCents + allocatedTaxCents + allocatedTipCents,
+    // What the receipt comes to, whoever ends up paying for it. grandCents is
+    // only what people have actually been charged.
+    billCents: itemsCents + taxCents + tipCents
   };
+}
+
+/**
+ * The number to print as "the total", and whether anybody is on the hook for it.
+ * With lines on the receipt and nobody assigned to any of them, grandCents is
+ * zero, and a $0.00 sitting above a real tax line reads as a free meal.
+ */
+export function shownTotal(split) {
+  const nobodyCharged = split.itemsCents > 0 && split.assignedCents === 0;
+  return { cents: nobodyCharged ? split.billCents : split.grandCents, nobodyCharged };
+}
+
+/**
+ * Does what came off the photo add up to what the receipt says? The receipt's
+ * own subtotal is the direct answer; without one it is backed out of the total.
+ * Returns null when the reader gave neither, so there is nothing to compare.
+ *
+ * @param {{itemsCents:number, taxCents?:number, tipCents?:number,
+ *          subtotalCents?:number|null, totalCents?:number|null}} args
+ */
+export function reconcile({ itemsCents, taxCents = 0, tipCents = 0, subtotalCents = null, totalCents = null }) {
+  let saysCents = null;
+  if (subtotalCents != null && subtotalCents > 0) saysCents = subtotalCents;
+  else if (totalCents != null && totalCents > 0) saysCents = totalCents - taxCents - tipCents;
+  if (saysCents == null || saysCents <= 0) return null;
+  const gapCents = saysCents - itemsCents;
+  // A cent either way is rounding on the reader's side, not a missing line.
+  return { readCents: itemsCents, saysCents, gapCents, matches: Math.abs(gapCents) <= 1 };
+}
+
+/**
+ * "Bacon, 9.12" a line at a time. The price is the trailing token, which is the
+ * whole point: splitting on the last comma turned "Rug, 1,234.56" into a 56
+ * cent rug. Thousands separators are stripped, a leading $ is allowed, and a
+ * line that does not end in a price is skipped rather than guessed at.
+ * @returns {{name:string, price:number}[]}
+ */
+export function parseBulkLines(text) {
+  const rows = [];
+  for (const line of String(text || '').split('\n')) {
+    const m = /^(.*?),\s*\$?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*$/.exec(line.trim());
+    if (!m) continue;
+    const name = m[1].trim();
+    const price = parseFloat(m[2].replace(/,/g, ''));
+    if (name && isFinite(price)) rows.push({ name, price });
+  }
+  return rows;
 }
 
 // Cut one amount into n equal-as-possible pieces, exact to the cent. A receipt

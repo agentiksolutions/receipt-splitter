@@ -1,10 +1,31 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { splitReceipt, money } from '../lib/money.js';
-import { archive, archivedIds, forget, historyIds, myName, remember, setMyName, unarchive } from '../lib/history.js';
-import { AvatarStack, BRANDS, IconBack, IconCheck, IconChevron, IconMenu, Progress, Wordmark } from './ui.jsx';
+import { splitReceipt, money, shownTotal } from '../lib/money.js';
+import {
+  archive,
+  archivedIds,
+  forget,
+  historyIds,
+  archiveTrip,
+  archivedTripIds,
+  forgetTrip,
+  unarchive,
+  unarchiveTrip
+} from '../lib/history.js';
+import { deleteHandler, owns, tokenFor } from '../lib/owner.js';
+import {
+  AvatarStack,
+  BRANDS,
+  confirmSheet,
+  EmptyState,
+  IconCheck,
+  IconChevron,
+  IconMenu,
+  IconPlus,
+  Skeleton,
+  Wordmark
+} from './ui.jsx';
 import { Mark } from './Logo.jsx';
-import NameCard from './NameCard.jsx';
 
 // Local calendar date. toISOString would hand back tomorrow after 8pm Eastern.
 export function today() {
@@ -27,12 +48,8 @@ const RECENT_LIMIT = 12;
 export default function Landing({ onOpen, onMenu, intent }) {
   const [splits, setSplits] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
-  const [namingMe, setNamingMe] = useState(false);
-  const [naming, setNaming] = useState(false);
-  const [title, setTitle] = useState('');
-  const [date, setDate] = useState(today);
+  const [trips, setTrips] = useState([]);
   const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     const filed = new Set(archivedIds());
@@ -65,6 +82,12 @@ export default function Landing({ onOpen, onMenu, intent }) {
       : { data: [] };
     const assignments = asg.data || [];
 
+    const tripIdsOn = [...new Set(found.map((r) => r.trip_id).filter(Boolean))];
+    const tripRes = tripIdsOn.length
+      ? await supabase.from('rs_trips').select('*').in('id', tripIdsOn)
+      : { data: [] };
+    setTrips(tripRes.data || []);
+
     const byId = new Map(found.map((r) => [r.id, r]));
     setSplits(
       ids
@@ -78,10 +101,12 @@ export default function Landing({ onOpen, onMenu, intent }) {
           // somebody who was never added has no payer, and everybody owes.
           const wanted = (receipt.payer_name || '').trim();
           const matches = wanted ? crowd.filter((p) => p.name === wanted) : [];
-          const payerId = matches.length === 1 ? matches[0].id : null;
+          const onSplit = crowd.some((p) => p.id === receipt.payer_id) ? receipt.payer_id : null;
+          const payerId = onSplit || (matches.length === 1 ? matches[0].id : null);
           const owing = crowd.filter((p) => p.id !== payerId);
           return {
             archived: filed.has(id),
+            tripId: receipt.trip_id || null,
             receipt,
             people: crowd,
             owing: owing.length,
@@ -103,8 +128,6 @@ export default function Landing({ onOpen, onMenu, intent }) {
   }, [load]);
 
   useEffect(() => {
-    if (intent === 'new') setNaming(true);
-    if (intent === 'name') setNamingMe(true);
     if (intent === 'archived') {
       setShowArchive(true);
       // Waits a frame so the section exists before we scroll to it.
@@ -113,12 +136,68 @@ export default function Landing({ onOpen, onMenu, intent }) {
   }, [intent]);
 
   async function removeSplit(id) {
-    const { error: e } = await supabase.from('rs_receipts').delete().eq('id', id);
-    if (e) {
-      setError(e.message);
+    const yes = await confirmSheet({
+      title: 'Delete this split?',
+      line: 'It disappears for everyone who has the link, and it cannot be brought back.',
+      confirm: 'Delete split'
+    });
+    if (!yes) return;
+    const { data: gone, error: e } = await supabase.rpc('rs_delete_receipt', { p_id: id, p_token: tokenFor(id) });
+    if (e || !gone) {
+      setError(e ? e.message : 'This split can only be deleted on the phone that made it.');
       return;
     }
-    forget(id);
+    forget(id); // also drops the token and the other per-receipt keys
+    load();
+  }
+
+  async function removeTrip(t) {
+    // The server decides what goes: it removes the splits carrying this trip's
+    // token, takes anyone else's out of the trip, and leaves those alone. The
+    // copy only mentions that when it is actually going to happen.
+    const mine = t.splits.filter((row) => owns(row.receipt.id));
+    const foreign = t.splits.length - mine.length;
+    const yes = await confirmSheet({
+      title: 'Delete this trip?',
+      line:
+        `Its ${mine.length} ${mine.length === 1 ? 'split goes' : 'splits go'} too, for everyone who has the links.` +
+        (foreign
+          ? ` ${foreign} made on another phone ${foreign === 1 ? 'is' : 'are'} kept and taken out of the trip.`
+          : ' This cannot be undone.'),
+      confirm: 'Delete trip'
+    });
+    if (!yes) return;
+
+    // Each split carries its OWN token, so its hash never equals the trip's.
+    // rs_delete_trip therefore cannot remove them: left to itself it detaches
+    // every split and deletes an empty trip, which is not what the sheet just
+    // promised. The client holds the per-split tokens, so it deletes those
+    // first and lets the RPC sweep up and take the trip.
+    for (const row of mine) {
+      const rid = row.receipt.id;
+      const { data: went } = await supabase.rpc('rs_delete_receipt', { p_id: rid, p_token: tokenFor(rid) });
+      if (!went) continue;
+      const path = (row.receipt.photo_url || '').trim();
+      if (path && !/^https?:/i.test(path)) await supabase.storage.from('receipt-photos').remove([path]);
+      forget(rid);
+    }
+
+    const { data: gone, error: e } = await supabase.rpc('rs_delete_trip', {
+      p_id: t.trip.id,
+      p_token: tokenFor(t.trip.id)
+    });
+    if (e || !gone) {
+      setError(e ? e.message : 'This trip can only be deleted on the phone that made it.');
+      load();
+      return;
+    }
+    forgetTrip(t.trip.id);
+    load();
+  }
+
+  function fileTrip(id, put) {
+    if (put) archiveTrip(id);
+    else unarchiveTrip(id);
     load();
   }
 
@@ -128,91 +207,33 @@ export default function Landing({ onOpen, onMenu, intent }) {
     load();
   }
 
-  // Who paid is chosen on the settle screen, from the people already added, so
-  // nothing here writes payer_name and nobody is added to the split yet.
-  async function create() {
-    setBusy(true);
-    setError(null);
-    const { data, error: e } = await supabase
-      .from('rs_receipts')
-      .insert({
-        title: title.trim() || "Dinner at Joe's",
-        event_date: date || today()
-      })
-      .select()
-      .single();
-    setBusy(false);
-    if (e) {
-      setError(e.message);
-      return;
-    }
-    remember(data.id);
-    onOpen(data.id, { wizard: true });
-  }
-
-  if (naming) {
-    return (
-      <div className="col">
-        <header className="topbar">
-          <Wordmark onClick={() => setNaming(false)} />
-        </header>
-        <Progress step={1} />
-        <div className="step">
-          <div className="step-head">
-            <button className="btn ghost sm" style={{ padding: 0, marginBottom: 2 }} onClick={() => setNaming(false)}>
-              <IconBack /> Back
-            </button>
-            <p className="step-count">Step 1 of 5</p>
-            <h1>What do you want to go halfsies on?</h1>
-          </div>
-
-          {error && <p className="banner bad">{error}</p>}
-
-          <div className="card">
-            <label className="field">
-              <span>Name</span>
-              <input
-                type="text"
-                value={title}
-                placeholder="Dinner at Joe's"
-                autoFocus
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Date</span>
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            </label>
-          </div>
-        </div>
-
-        <div className="dock">
-          <button className="btn primary wide tall" onClick={create} disabled={busy}>
-            {busy ? 'Saving' : 'Continue'}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   // The pitch shows only on a device that has never made a split. After that
   // home is the app itself. historyIds is a synchronous localStorage read, so
   // this is settled on the first paint and nothing flashes.
   const hasHistory = historyIds().length > 0;
   const live = (splits || []).filter((t) => !t.archived);
   const filed = (splits || []).filter((t) => t.archived);
+  const tripFiled = new Set(archivedTripIds());
+  const tripById = new Map(trips.map((t) => [t.id, t]));
 
-  const nameCard = namingMe ? (
-    <NameCard
-      value={myName()}
-      sub="Changing this only affects new splits."
-      onSave={(n) => {
-        setMyName(n);
-        setNamingMe(false);
-      }}
-      onCancel={() => setNamingMe(false)}
-    />
-  ) : null;
+  function group(list) {
+    const loose = [];
+    const grouped = new Map();
+    for (const row of list) {
+      const trip = row.tripId ? tripById.get(row.tripId) : null;
+      if (!trip) {
+        loose.push(row);
+        continue;
+      }
+      if (!grouped.has(trip.id)) grouped.set(trip.id, { trip, splits: [] });
+      grouped.get(trip.id).splits.push(row);
+    }
+    return { loose, trips: [...grouped.values()] };
+  }
+
+  const shown = group(live.filter((r) => !r.tripId || !tripFiled.has(r.tripId)));
+  const shelved = group(filed);
+  const shelvedTrips = group(live.filter((r) => r.tripId && tripFiled.has(r.tripId))).trips;
 
   const bar = (
     <header className="topbar">
@@ -228,8 +249,7 @@ export default function Landing({ onOpen, onMenu, intent }) {
       <div className="col market-col plain">
         {bar}
         {error && <p className="banner bad">{error}</p>}
-        {nameCard}
-        <Marketing onStart={() => setNaming(true)} />
+          <Marketing onStart={() => onOpen(null, { intent: 'new' })} />
       </div>
     );
   }
@@ -240,30 +260,58 @@ export default function Landing({ onOpen, onMenu, intent }) {
 
       {error && <p className="banner bad">{error}</p>}
 
-      {nameCard}
 
       <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
+
+      {shown.trips.map((t) => (
+        <TripCard
+          key={t.trip.id}
+          group={t}
+          onOpen={() => onOpen(null, { trip: t.trip.id })}
+          onArchive={() => fileTrip(t.trip.id, true)}
+          onDelete={deleteHandler(t.trip.id, () => removeTrip(t))}
+        />
+      ))}
+
       <RecentList
-        splits={splits === null ? null : live}
+        splits={splits === null ? null : shown.loose}
         onOpen={onOpen}
         onArchive={(id) => fileAway(id, true)}
         onDelete={removeSplit}
+        showEmpty={shown.trips.length === 0}
       />
 
-      {filed.length > 0 && (
+      {filed.length + shelvedTrips.length > 0 && (
         <section id="archived" style={{ marginTop: 22 }}>
           <button className="disclose" onClick={() => setShowArchive((v) => !v)} aria-expanded={showArchive}>
             <IconChevron open={showArchive} />
-            Archived ({filed.length})
+            Archived ({filed.length + shelvedTrips.length})
           </button>
           {showArchive && (
-            <RecentList splits={filed} onOpen={onOpen} onUnarchive={(id) => fileAway(id, false)} onDelete={removeSplit} />
+            <>
+              {shelvedTrips.map((t) => (
+                <TripCard
+                  key={t.trip.id}
+                  group={t}
+                  onOpen={() => onOpen(null, { trip: t.trip.id })}
+                  onUnarchive={() => fileTrip(t.trip.id, false)}
+                  onDelete={deleteHandler(t.trip.id, () => removeTrip(t))}
+                />
+              ))}
+              <RecentList
+                splits={shelved.loose}
+                onOpen={onOpen}
+                onUnarchive={(id) => fileAway(id, false)}
+                onDelete={removeSplit}
+                showEmpty={shelvedTrips.length === 0}
+              />
+            </>
           )}
         </section>
       )}
 
       <div className="dock">
-        <button className="btn primary wide tall" onClick={() => setNaming(true)}>
+        <button className="btn primary wide tall" onClick={() => onOpen(null, { intent: 'new' })}>
           New split
         </button>
       </div>
@@ -307,10 +355,6 @@ function Marketing({ onStart }) {
       <div className="mk-hero">
         <Mark size={56} tone="light" />
         <h1>When your math isn't mathing, go halfsies.</h1>
-        <p>
-          Take a photo of the receipt, tap who had what, and everyone gets their number with tax and tip included.
-          Then they pay you with Venmo, Cash App, Zelle or Apple Cash.
-        </p>
         <button className="btn tall" onClick={onStart}>
           Start a split
         </button>
@@ -338,9 +382,8 @@ function Marketing({ onStart }) {
       <section>
         <h2>Works with</h2>
         <div className="mk-brands">
-          {BRANDS.map(({ key, label, Mark: BrandMark }) => (
-            <span className="mk-brand" key={key}>
-              <BrandMark />
+          {BRANDS.map(({ key, label }) => (
+            <span className={'mk-brand v-' + key} key={key}>
               {label}
             </span>
           ))}
@@ -368,7 +411,6 @@ function Marketing({ onStart }) {
    so it cannot drift away from the product. Decorative, so it is hidden from
    assistive tech rather than described twice. */
 function SettleMock() {
-  const { Mark: VenmoMark } = BRANDS[0];
   return (
     <div className="mk-frame" aria-hidden="true">
       <div className="mk-screen">
@@ -399,10 +441,7 @@ function SettleMock() {
             <span className="big num">$24.18</span>
           </div>
           <div className="pays">
-            <span className="pay v-venmo">
-              <VenmoMark />
-              Venmo
-            </span>
+            <span className="pay v-venmo">Venmo</span>
           </div>
         </div>
 
@@ -425,16 +464,22 @@ function SettleMock() {
   );
 }
 
-export const DELETE_ASK = 'Delete this split for everyone who has the link?';
 
 // Past this share of the card's width, letting go commits the action.
 const COMMIT_AT = 0.4;
 
-function RecentList({ splits, onOpen, onArchive, onUnarchive, onDelete }) {
+function RecentList({ splits, onOpen, onArchive, onUnarchive, onDelete, showEmpty = true }) {
   const rows = useMemo(() => splits || [], [splits]);
 
-  if (splits === null) return <p className="empty">Loading</p>;
-  if (!rows.length) return <p className="empty">No splits yet.</p>;
+  if (splits === null) return <Skeleton rows={3} />;
+  // "No splits yet" printed underneath a trip card full of splits. The empty
+  // state belongs to the whole list, so the caller says whether it applies.
+  //
+  // No action button here on purpose. New split is in the sticky bar a thumb's
+  // width away, and two buttons doing the same thing is worse than one.
+  if (!rows.length) {
+    return showEmpty ? <EmptyState icon={<IconPlus />} line="No splits yet. Start one and send the link." /> : null;
+  }
 
   return (
     <div className="recent">
@@ -454,7 +499,9 @@ function RecentList({ splits, onOpen, onArchive, onUnarchive, onDelete }) {
 
 // One card that slides under the finger. Green behind the right edge to file it
 // away, red behind the left edge to delete it, the way Mail does it.
-function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
+// The gesture, once, for both a split row and a trip card. Right archives,
+// left deletes, matching what is already shipped.
+function Swipeable({ fileLabel, onFile, onDelete, onOpen, children }) {
   const [dx, setDx] = useState(0);
   const [leaving, setLeaving] = useState(0);
   const [menu, setMenu] = useState(false);
@@ -462,19 +509,14 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
   const drag = useRef(null);
   const swiped = useRef(false);
 
-  const id = row.receipt.id;
-  const fileLabel = onUnarchive ? 'Unarchive' : 'Archive';
   const width = box.current ? box.current.offsetWidth : 320;
   const armed = Math.abs(dx) >= width * COMMIT_AT;
 
-  function file() {
-    (onUnarchive || onArchive)(id);
-  }
-
   function askDelete() {
-    if (!window.confirm(DELETE_ASK)) return false;
-    onDelete(id);
-    return true;
+    if (!onDelete) return;
+    setMenu(false);
+    setDx(0);
+    onDelete();
   }
 
   function down(e) {
@@ -520,14 +562,10 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
     }
     if (moved > 0) {
       setLeaving(1);
-      setTimeout(file, 200);
+      setTimeout(onFile, 200);
       return;
     }
-    if (!askDelete()) {
-      setDx(0);
-      return;
-    }
-    setLeaving(-1);
+    askDelete();
   }
 
   const shift = leaving ? leaving * width * 1.05 : dx;
@@ -535,62 +573,46 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
   return (
     <div className="recent-item">
       <div className="swipe" ref={box}>
-        {shift !== 0 && (
+        {shift !== 0 && (shift > 0 || onDelete) && (
           <span className={'swipe-bg ' + (shift > 0 ? 'arch' : 'del')} aria-hidden="true">
             {armed
-              ? shift < 0
-                ? 'Release to delete'
-                : 'Release to ' + fileLabel.toLowerCase()
-              : shift < 0
-                ? 'Delete'
-                : fileLabel}
+              ? shift > 0
+                ? 'Release to ' + fileLabel.toLowerCase()
+                : 'Release to delete'
+              : shift > 0
+                ? fileLabel
+                : 'Delete'}
           </span>
         )}
-        <a
-          className={'recent-card' + (drag.current && drag.current.axis === 'x' ? '' : ' glide')}
-          href={'?receipt=' + id}
+        <div
+          className={'swipe-hold' + (drag.current && drag.current.axis === 'x' ? '' : ' glide')}
           style={{ transform: 'translateX(' + shift + 'px)' }}
           onPointerDown={down}
           onPointerMove={move}
           onPointerUp={up}
           onPointerCancel={up}
-          onClick={(e) => {
-            e.preventDefault();
+          onClick={() => {
             if (swiped.current) return;
-            onOpen(id);
+            onOpen();
           }}
         >
-          <div className="top">
-            <span className="title">{row.receipt.title || 'Untitled split'}</span>
-            <span className="total num">{money(row.split.grandCents)}</span>
-          </div>
-          <div className="when">{prettyDate(row.receipt.event_date)}</div>
-          <div className="bottom">
-            <AvatarStack people={row.people} />
-            {row.owing > 0 ? (
-              <span className={'paid' + (row.paid === row.owing ? ' all' : '')}>
-                {row.paid === row.owing ? 'All settled' : `${row.paid} of ${row.owing} paid`}
-              </span>
-            ) : (
-              <span className="paid">
-                {row.people.length} {row.people.length === 1 ? 'person' : 'people'}
-              </span>
-            )}
-          </div>
-        </a>
+          {children}
+        </div>
       </div>
 
       <div className="row-actions">
-        <button className="btn ghost sm" onClick={file}>
+        <button className="btn ghost sm" onClick={onFile}>
           {fileLabel}
         </button>
-        <button className="btn ghost sm" onClick={askDelete}>
-          Delete
-        </button>
+        {onDelete && (
+          <button className="btn ghost sm" onClick={askDelete}>
+            Delete
+          </button>
+        )}
       </div>
 
       <button className="offscreen" onClick={() => setMenu((v) => !v)} aria-expanded={menu}>
-        More actions for {row.receipt.title || 'Untitled split'}
+        More actions
       </button>
       {menu && (
         <div className="row-menu">
@@ -598,22 +620,109 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
             className="sheet-row"
             onClick={() => {
               setMenu(false);
-              file();
+              onFile();
             }}
           >
             {fileLabel}
           </button>
-          <button
-            className="sheet-row"
-            onClick={() => {
-              setMenu(false);
-              askDelete();
-            }}
-          >
-            Delete
-          </button>
+          {onDelete && (
+            <button
+              className="sheet-row"
+              onClick={() => {
+                setMenu(false);
+                askDelete();
+              }}
+            >
+              Delete
+            </button>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
+  const id = row.receipt.id;
+  const total = shownTotal(row.split);
+
+  return (
+    <Swipeable
+      fileLabel={onUnarchive ? 'Unarchive' : 'Archive'}
+      onFile={() => (onUnarchive || onArchive)(id)}
+      // A split opened from someone else's link has no token on this device,
+      // so there is nothing to delete with and no control to offer.
+      onDelete={deleteHandler(id, () => onDelete(id))}
+      onOpen={() => onOpen(id)}
+    >
+      <div className="recent-card">
+        <div className="top">
+          <span className="title">{row.receipt.title || 'Untitled split'}</span>
+          <span className="total num">{money(total.cents)}</span>
+        </div>
+        <div className="when">{prettyDate(row.receipt.event_date)}</div>
+        <div className="bottom">
+          <AvatarStack people={row.people} />
+          {total.nobodyCharged ? (
+            <span className="paid">Nobody is charged yet</span>
+          ) : row.owing > 0 ? (
+            <span className={'paid' + (row.paid === row.owing ? ' all' : '')}>
+              {row.paid === row.owing ? 'All settled' : row.paid + ' of ' + row.owing + ' paid'}
+            </span>
+          ) : (
+            <span className="paid">
+              {row.people.length} {row.people.length === 1 ? 'person' : 'people'}
+            </span>
+          )}
+        </div>
+      </div>
+    </Swipeable>
+  );
+}
+
+// Every split in one trip, as a single card on home.
+function TripCard({ group, onOpen, onArchive, onUnarchive, onDelete }) {
+  const { trip, splits } = group;
+  const totalCents = splits.reduce((sum, r) => sum + shownTotal(r.split).cents, 0);
+  const dates = splits.map((r) => r.receipt.event_date).filter(Boolean).sort();
+  const span =
+    dates.length === 0
+      ? prettyDate(trip.start_date)
+      : dates[0] === dates[dates.length - 1]
+        ? prettyDate(dates[0])
+        : prettyDate(dates[0]) + ' to ' + prettyDate(dates[dates.length - 1]);
+
+  const seen = new Set();
+  const crowd = [];
+  for (const r of splits) {
+    for (const p of r.people) {
+      const key = p.name.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      crowd.push(p);
+    }
+  }
+
+  return (
+    <Swipeable
+      fileLabel={onUnarchive ? 'Unarchive' : 'Archive'}
+      onFile={onUnarchive || onArchive}
+      onDelete={onDelete}
+      onOpen={onOpen}
+    >
+      <div className="recent-card trip-card">
+        <div className="top">
+          <span className="title">{trip.title}</span>
+          <span className="total num">{money(totalCents)}</span>
+        </div>
+        <div className="when">{span}</div>
+        <div className="bottom">
+          <AvatarStack people={crowd} />
+          <span className="paid">
+            {splits.length} {splits.length === 1 ? 'split' : 'splits'}
+          </span>
+        </div>
+      </div>
+    </Swipeable>
   );
 }

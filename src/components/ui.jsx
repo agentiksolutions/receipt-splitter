@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 export { Mark, Wordmark } from './Logo.jsx';
 
 /* Small pieces shared by every screen: avatars, icons, brand marks. */
@@ -137,55 +137,218 @@ export const IconList = () => (
   </svg>
 );
 
-/* ---- payment brand marks. Drawn here, nothing is fetched. ---- */
-
-const badge = (bg, glyph, letterSize = 12) => (
-  <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-    <rect width="20" height="20" rx="5" fill={bg} />
-    {typeof glyph === 'string' ? (
-      <text
-        x="10"
-        y="14.4"
-        textAnchor="middle"
-        fontFamily="Inter, sans-serif"
-        fontSize={letterSize}
-        fontWeight="700"
-        fill="#ffffff"
-      >
-        {glyph}
-      </text>
-    ) : (
-      glyph
-    )}
-  </svg>
-);
-
-export const MarkVenmo = () => badge('#008cff', 'V');
-export const MarkCashApp = () => badge('#00d632', '$', 12.5);
-export const MarkZelle = () => badge('#6d1ed4', 'Z');
-export const MarkApplePay = () =>
-  badge(
-    '#000000',
-    <path
-      d="M13.1 11.3c0-1.4 1.1-2 1.2-2.1-.7-1-1.7-1.1-2.1-1.1-.9-.1-1.7.5-2.2.5s-1.1-.5-1.9-.5c-1 0-1.9.6-2.4 1.5-1 1.8-.3 4.4.7 5.8.5.7 1.1 1.5 1.8 1.5s1-.4 1.9-.4 1.1.4 1.9.4 1.2-.7 1.7-1.4c.5-.8.7-1.5.7-1.6 0 0-1.3-.5-1.3-2.6zM11.6 7.2c.4-.5.7-1.2.6-1.9-.6 0-1.3.4-1.7.9-.4.4-.7 1.2-.6 1.8.7.1 1.3-.3 1.7-.8z"
-      fill="#ffffff"
-    />
-  );
+/* ---- payment services ----------------------------------------------------
+   No marks. Drawing a rounded square with a "V" in it is not Venmo's logo, it
+   just looks enough like one to be wrong. The name in the brand colour is
+   honest, reads at a glance, and costs nothing to render. The colour comes
+   from a token so dark mode can lift it off a dark card. */
 
 export const BRANDS = [
-  { key: 'venmo', label: 'Venmo', Mark: MarkVenmo },
-  { key: 'cashapp', label: 'Cash App', Mark: MarkCashApp },
-  { key: 'zelle', label: 'Zelle', Mark: MarkZelle },
-  { key: 'applepay', label: 'Apple Cash', Mark: MarkApplePay }
+  { key: 'venmo', label: 'Venmo' },
+  { key: 'cashapp', label: 'Cash App' },
+  { key: 'paypal', label: 'PayPal' },
+  { key: 'zelle', label: 'Zelle' },
+  { key: 'applepay', label: 'Apple Cash' }
 ];
 
 /* ---- shell ---- */
 
-export function Progress({ step, total = 5 }) {
+
+/* ---- toast ----------------------------------------------------------- */
+
+// One toast at a time, addressed from anywhere. A context would mean threading
+// a provider through five components to say one sentence.
+let sink = null;
+
+export function toast(text, action = null) {
+  if (sink) sink({ text, action, key: Date.now() });
+}
+
+/**
+ * The one chip. Plain is a button you turn on and off; removable is a container
+ * carrying its own remove button. Both are 44 tall, both take on and disabled,
+ * and a removable chip never loses its x.
+ *
+ * @param {boolean}  on        the pressed state
+ * @param {boolean}  disabled  greyed and inert, remove button included
+ * @param {?function} onClick  omit for a chip that is not itself a button
+ * @param {?function} onRemove present makes the chip removable
+ */
+export function Chip({ on, disabled = false, onClick, onRemove, removeLabel, className = '', children, ...rest }) {
+  const cls = 'chip' + (on ? ' on' : '') + (className ? ' ' + className : '');
+  if (!onRemove) {
+    return (
+      <button
+        type="button"
+        className={cls}
+        // A chip that is a plain action, like "Rest to Jordan", is not a toggle
+        // and must not claim a pressed state it does not have.
+        aria-pressed={on === undefined ? undefined : Boolean(on)}
+        disabled={disabled}
+        onClick={onClick}
+        {...rest}
+      >
+        {children}
+      </button>
+    );
+  }
   return (
-    <div className="progress" role="progressbar" aria-valuenow={step} aria-valuemin={1} aria-valuemax={total} aria-label={`Step ${step} of ${total}`}>
-      {Array.from({ length: total }, (_, i) => (
-        <span key={i} className={i < step ? 'on' : ''} />
+    <span className={cls} {...rest}>
+      {children}
+      <button
+        type="button"
+        className="chip-x"
+        disabled={disabled}
+        onClick={onRemove}
+        aria-label={removeLabel}
+      >
+        &times;
+      </button>
+    </span>
+  );
+}
+
+export function Toaster() {
+  const [note, setNote] = useState(null);
+  const timer = useRef(null);
+
+  useEffect(() => {
+    sink = setNote;
+    return () => {
+      sink = null;
+      clearTimeout(timer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!note) return undefined;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setNote(null), 3000);
+    return () => clearTimeout(timer.current);
+  }, [note]);
+
+  if (!note) return null;
+  return (
+    <div className="toast" role="status" aria-live="polite">
+      <span>{note.text}</span>
+      {note.action && (
+        <button
+          className="toast-do"
+          onClick={() => {
+            note.action.run();
+            setNote(null);
+          }}
+        >
+          {note.action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ---------- confirm sheet ---------------------------------------------- */
+
+let asker = null;
+
+/**
+ * Stands in for window.confirm, which iOS draws as a system alert with the
+ * site's domain across the top. Resolves true only when the action button is
+ * pressed, so a call site reads `if (!(await confirmSheet(...))) return;`.
+ *
+ * @param {{title:string, line:string, confirm?:string, destructive?:boolean}} opts
+ * @returns {Promise<boolean>}
+ */
+export function confirmSheet({ title, line, confirm = 'Delete', destructive = true }) {
+  return new Promise((resolve) => {
+    // No host mounted means nothing can be asked, and silently going ahead with
+    // a delete would be the worst possible answer.
+    if (!asker) {
+      resolve(false);
+      return;
+    }
+    asker({ title, line, confirm, destructive, resolve, key: Date.now() });
+  });
+}
+
+export function ConfirmHost() {
+  const [ask, setAsk] = useState(null);
+
+  useEffect(() => {
+    asker = setAsk;
+    return () => {
+      asker = null;
+    };
+  }, []);
+
+  // Every way out of the sheet answers the promise. An unresolved one would
+  // leave the caller awaiting for the life of the page.
+  const answer = useCallback(
+    (yes) => {
+      ask?.resolve(yes);
+      setAsk(null);
+    },
+    [ask]
+  );
+
+  useEffect(() => {
+    if (!ask) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') answer(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [ask, answer]);
+
+  if (!ask) return null;
+  return (
+    <div className="ask-wrap" role="dialog" aria-modal="true" aria-label={ask.title}>
+      <button className="ask-veil" aria-label="Cancel" onClick={() => answer(false)} />
+      <div className="ask">
+        <h2>{ask.title}</h2>
+        <p>{ask.line}</p>
+        <button
+          className={'btn wide tall ' + (ask.destructive ? 'danger' : 'primary')}
+          autoFocus
+          onClick={() => answer(true)}
+        >
+          {ask.confirm}
+        </button>
+        <button className="btn ghost wide tall" onClick={() => answer(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Nothing here yet, and the one thing to do about it. An empty screen that just
+ * says "none" leaves somebody stuck.
+ */
+export function EmptyState({ icon, line, action, onAction }) {
+  return (
+    <div className="empty-state">
+      {icon && <span className="empty-icon">{icon}</span>}
+      <p>{line}</p>
+      {action && onAction && (
+        <button className="btn outline" onClick={onAction}>
+          {action}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Grey bars in the shape of the rows that are coming, instead of the word
+ *  "Loading". Decorative, so screen readers get the status line instead. */
+export function Skeleton({ rows = 3, className = '' }) {
+  return (
+    <div className={'skeleton' + (className ? ' ' + className : '')} role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, i) => (
+        <div className="sk-row" key={i} aria-hidden="true">
+          <span className="sk-line wide" />
+          <span className="sk-line" />
+        </div>
       ))}
     </div>
   );

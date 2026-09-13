@@ -1,47 +1,39 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { forget, remember } from '../lib/history.js';
-import { splitReceipt, money } from '../lib/money.js';
-import { IconBack, IconMenu, IconShare, Progress, Wordmark } from './ui.jsx';
-import PeopleStep from './PeopleStep.jsx';
-import ItemsStep from './ItemsStep.jsx';
-import AssignStep from './AssignStep.jsx';
-import SettleStep from './SettleStep.jsx';
+import { deleteHandler, mintToken, saveToken, tokenFor } from '../lib/owner.js';
+import { money, shownTotal, splitReceipt } from '../lib/money.js';
+import { confirmSheet, IconBack, IconMenu, IconShare, Skeleton, Wordmark } from './ui.jsx';
+import Split from './Split.jsx';
+import { prettyDate, today } from './Landing.jsx';
 
-// Which splits this device has already walked through the stepper. Reopening
-// one lands on Settle instead of restarting the wizard.
-const DONE_KEY = 'rs.done';
+// A split that has not been saved yet. The row is written the moment the title
+// gets its first keystroke, and everything here is the shape the page reads
+// until then.
+const draftReceipt = (tripId) => ({
+  id: null,
+  title: '',
+  event_date: today(),
+  category: 'food',
+  trip_id: tripId || null,
+  payer_name: null,
+  payer_id: null,
+  split_mode: 'items',
+  tax_amount: null,
+  tip_amount: null,
+  merchant: null,
+  receipt_time: null,
+  photo_url: null
+});
 
-function doneIds() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(DONE_KEY) || '[]');
-    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function markDone(id) {
-  try {
-    localStorage.setItem(DONE_KEY, JSON.stringify([id, ...doneIds().filter((x) => x !== id)].slice(0, 100)));
-  } catch {
-    /* private mode: the wizard just runs again */
-  }
-}
-
-const TABS = [
-  ['items', 'Items'],
-  ['people', 'People'],
-  ['settle', 'Settle']
-];
-
-export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
-  const [receipt, setReceipt] = useState(null);
+export default function Receipt({ receiptId, presetTrip, onExit, onMenu, onOpenTrip, onCreated }) {
+  const [id, setId] = useState(receiptId || null);
+  const [receipt, setReceipt] = useState(() => (receiptId ? null : draftReceipt(presetTrip)));
   const [people, setPeople] = useState([]);
   const [items, setItems] = useState([]);
   const [assignments, setAssignments] = useState([]);
-  const [status, setStatus] = useState('loading'); // loading | ready | missing
-  const [view, setView] = useState(null); // {mode:'wizard',step} | {mode:'tabs',tab}
+  const [trip, setTrip] = useState(null);
+  const [status, setStatus] = useState(receiptId ? 'loading' : 'ready'); // loading | ready | missing
   const [error, setError] = useState(null);
   const [flash, setFlash] = useState(null);
 
@@ -49,35 +41,47 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
   const pending = useRef(0); // local writes in flight
   const itemIds = useRef(new Set());
   const flashTimer = useRef(null);
+  const idRef = useRef(receiptId || null);
+  const draftRef = useRef(receiptId ? null : draftReceipt(presetTrip));
+  const creating = useRef(null);
+  const generation = useRef(0);
 
   const loadAll = useCallback(async () => {
+    const rid = idRef.current;
+    if (!rid) return null;
+    // Four requests race each other and several loads can be in flight at once.
+    // Only the newest may paint, or a slow early one overwrites what just came
+    // back and the screen silently goes stale.
+    const turn = ++generation.current;
     const [rec, ppl, its, asg] = await Promise.all([
-      supabase.from('rs_receipts').select('*').eq('id', receiptId).maybeSingle(),
-      supabase.from('rs_people').select('*').eq('receipt_id', receiptId).order('created_at'),
-      supabase.from('rs_items').select('*').eq('receipt_id', receiptId).order('created_at'),
+      supabase.from('rs_receipts').select('*').eq('id', rid).maybeSingle(),
+      supabase.from('rs_people').select('*').eq('receipt_id', rid).order('created_at'),
+      supabase.from('rs_items').select('*').eq('receipt_id', rid).order('created_at'),
       supabase
         .from('rs_item_assignments')
         .select('item_id, person_id, rs_items!inner(receipt_id)')
-        .eq('rs_items.receipt_id', receiptId)
+        .eq('rs_items.receipt_id', rid)
     ]);
+    if (turn !== generation.current) return null;
     if (rec.error) {
       setError(rec.error.message);
       setStatus('ready');
-      return;
+      return null;
     }
     if (!rec.data) {
       setStatus('missing');
-      return;
+      return null;
     }
     const itemRows = its.data || [];
     itemIds.current = new Set(itemRows.map((i) => i.id));
+    draftRef.current = rec.data;
     setReceipt(rec.data);
     setPeople(ppl.data || []);
     setItems(itemRows);
     setAssignments((asg.data || []).map((a) => ({ item_id: a.item_id, person_id: a.person_id })));
     setStatus('ready');
     return { receipt: rec.data, people: ppl.data || [], items: itemRows };
-  }, [receiptId]);
+  }, []);
 
   // Realtime and bulk writes both arrive in bursts. One trailing refetch covers
   // the burst, and it waits while this device still has writes in flight.
@@ -105,41 +109,105 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
     }
   }, []);
 
+  // The row is created once, on the first thing anybody types. Two edits landing
+  // together share the one insert rather than racing to make two splits.
+  const ensureReceipt = useCallback(async () => {
+    if (idRef.current) return idRef.current;
+    if (creating.current) return creating.current;
+    creating.current = (async () => {
+      const d = draftRef.current || draftReceipt(null);
+      // Proof this device made the row. Only the hash is stored; the token
+      // itself never leaves this phone, and the delete RPC compares the two.
+      const { token, hash } = await mintToken();
+      const { data, error: e } = await supabase
+        .from('rs_receipts')
+        .insert({
+          // No invented title. The column is NOT NULL, so blank is an empty
+          // string here and every reader shows "Untitled split" for it.
+          title: (d.title || '').trim(),
+          event_date: d.event_date || today(),
+          category: d.category || 'food',
+          trip_id: d.trip_id || null,
+          payer_name: d.payer_name || null,
+          // tax and tip are NOT NULL with a zero default, so a blank draft has
+          // to leave them out rather than hand over a null.
+          ...(d.tax_amount == null ? {} : { tax_amount: d.tax_amount }),
+          ...(d.tip_amount == null ? {} : { tip_amount: d.tip_amount }),
+          merchant: d.merchant || null,
+          receipt_time: d.receipt_time || null,
+          owner_token_hash: hash
+        })
+        .select()
+        .single();
+      if (e || !data) {
+        creating.current = null;
+        setError(e ? e.message : 'Could not start this split.');
+        return null;
+      }
+      idRef.current = data.id;
+      draftRef.current = data;
+      setId(data.id);
+      setReceipt(data);
+      saveToken(data.id, token);
+      remember(data.id);
+      onCreated?.(data.id);
+      return data.id;
+    })();
+    return creating.current;
+  }, [onCreated]);
+
+  // The trip name, for the line back to the roll-up.
   useEffect(() => {
+    const tid = receipt?.trip_id;
+    if (!tid) {
+      setTrip(null);
+      return undefined;
+    }
     let alive = true;
-    loadAll().then((first) => {
-      if (!alive || !first) return;
-      setView(decideView(receiptId, startWizard, first.people, first.items));
-    });
+    supabase
+      .from('rs_trips')
+      .select('*')
+      .eq('id', tid)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (alive) setTrip(data || null);
+      });
     return () => {
       alive = false;
+    };
+  }, [receipt?.trip_id]);
+
+  useEffect(() => {
+    loadAll();
+    return () => {
       clearTimeout(timer.current);
       clearTimeout(flashTimer.current);
     };
-  }, [loadAll, receiptId, startWizard]);
+  }, [loadAll]);
 
   useEffect(() => {
+    if (!id) return undefined;
     const channel = supabase
-      .channel('rs:' + receiptId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_receipts', filter: 'id=eq.' + receiptId }, refresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_people', filter: 'receipt_id=eq.' + receiptId }, refresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_items', filter: 'receipt_id=eq.' + receiptId }, refresh)
+      .channel('rs:' + id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_receipts', filter: 'id=eq.' + id }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_people', filter: 'receipt_id=eq.' + id }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_items', filter: 'receipt_id=eq.' + id }, refresh)
       // Assignments carry no receipt_id, so this one cannot be filtered on the
       // server. Drop events for items that are not on this receipt.
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rs_item_assignments' }, (payload) => {
-        const id = payload.new?.item_id || payload.old?.item_id;
-        if (id && !itemIds.current.has(id)) return;
+        const iid = payload.new?.item_id || payload.old?.item_id;
+        if (iid && !itemIds.current.has(iid)) return;
         refresh();
       })
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [receiptId, refresh]);
+  }, [id, refresh]);
 
   useEffect(() => {
-    if (receipt?.id) remember(receipt.id);
-  }, [receipt?.id]);
+    if (id) remember(id);
+  }, [id]);
 
   const say = useCallback((text) => {
     setFlash(text);
@@ -177,69 +245,91 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
 
   const byPerson = useMemo(() => new Map(split.perPerson.map((s) => [s.id, s])), [split]);
 
-  // payer_name is free text, so a rename or a duplicate name can leave it
-  // pointing at nobody. Only treat it as a person when exactly one matches.
+  // The payer is a row id. payer_name is written alongside it for the PDFs and
+  // is the only clue on a split made before the column existed: it is free
+  // text, so it counts only when exactly one person carries that name.
   const storedPayer = (receipt?.payer_name || '').trim();
+  const payerById = receipt?.payer_id ? crowd.find((p) => p.id === receipt.payer_id) : null;
   const payerMatches = storedPayer ? crowd.filter((p) => p.name === storedPayer) : [];
-  const payer = payerMatches.length === 1 ? payerMatches[0] : null;
-  // Every screen reads the resolved person, never the raw column, so a name
-  // left on an older receipt that matches nobody counts as no payer at all.
+  const payer = payerById || (payerMatches.length === 1 ? payerMatches[0] : null);
   const payerName = payer ? payer.name : '';
-
-  const unassignedCount = split.unassignedItems.length;
 
   /* ---- actions ---- */
 
   const patchReceipt = useCallback(
     async (patch) => {
+      draftRef.current = { ...(draftRef.current || {}), ...patch };
       setReceipt((r) => ({ ...r, ...patch }));
-      await write(() => supabase.from('rs_receipts').update(patch).eq('id', receiptId));
+      // Only a real title starts the row. Picking a date or a category first is
+      // held in the draft and written with the insert when the name lands, so
+      // opening a new split and putting the phone down leaves nothing behind.
+      // Once the insert is in flight this has to wait for it rather than return:
+      // the insert already read the draft, so a patch dropped here is lost. That
+      // is how the auto-added payer went missing.
+      const named = 'title' in patch && (patch.title || '').trim();
+      if (!idRef.current && !named && !creating.current) return;
+      const rid = idRef.current || (await ensureReceipt());
+      if (!rid) return;
+      await write(() => supabase.from('rs_receipts').update(patch).eq('id', rid));
       refresh();
     },
-    [receiptId, refresh, write]
+    [ensureReceipt, refresh, write]
   );
 
+  // `extra` carries the owner's saved handles when the person being added is
+  // the owner, so a friend can pay them without anybody typing anything.
   const addPeople = useCallback(
-    async (names) => {
-      const rows = names
-        .map((n) => n.trim())
-        .filter(Boolean)
-        .map((name) => ({ receipt_id: receiptId, name }));
+    async (names, extra = null) => {
+      const rows = names.map((n) => n.trim()).filter(Boolean);
       if (!rows.length) return;
-      await write(() => supabase.from('rs_people').insert(rows));
+      const rid = idRef.current || (await ensureReceipt());
+      if (!rid) return;
+      await write(() =>
+        supabase.from('rs_people').insert(rows.map((name) => ({ receipt_id: rid, name, ...(extra || {}) })))
+      );
       refresh();
     },
-    [receiptId, refresh, write]
+    [ensureReceipt, refresh, write]
   );
 
   const removePerson = useCallback(
-    async (id) => {
-      setPeople((prev) => prev.filter((p) => p.id !== id));
-      setAssignments((prev) => prev.filter((a) => a.person_id !== id));
-      await write(() => supabase.from('rs_people').delete().eq('id', id));
+    async (pid) => {
+      setPeople((prev) => prev.filter((p) => p.id !== pid));
+      setAssignments((prev) => prev.filter((a) => a.person_id !== pid));
+      await write(() => supabase.from('rs_people').delete().eq('id', pid));
       refresh();
     },
     [refresh, write]
   );
 
   // One insert with an array, never a loop. A 25 line receipt is one round trip.
+  // Returns the inserted rows, in the order they were supplied, so the caller
+  // can assign them straight away.
   const addItems = useCallback(
     async (rows) => {
-      if (!rows.length) return false;
-      const ok = await write(() =>
-        supabase.from('rs_items').insert(rows.map((r) => ({ receipt_id: receiptId, name: r.name, price: r.price })))
-      );
+      if (!rows.length) return null;
+      const rid = idRef.current || (await ensureReceipt());
+      if (!rid) return null;
+      let made = null;
+      const ok = await write(async () => {
+        const res = await supabase
+          .from('rs_items')
+          .insert(rows.map((r) => ({ receipt_id: rid, name: r.name, price: r.price })))
+          .select();
+        made = res.data || null;
+        return res;
+      });
       refresh();
-      return ok;
+      return ok ? made : null;
     },
-    [receiptId, refresh, write]
+    [ensureReceipt, refresh, write]
   );
 
   const removeItem = useCallback(
-    async (id) => {
-      setItems((prev) => prev.filter((i) => i.id !== id));
-      setAssignments((prev) => prev.filter((a) => a.item_id !== id));
-      await write(() => supabase.from('rs_items').delete().eq('id', id));
+    async (iid) => {
+      setItems((prev) => prev.filter((i) => i.id !== iid));
+      setAssignments((prev) => prev.filter((a) => a.item_id !== iid));
+      await write(() => supabase.from('rs_items').delete().eq('id', iid));
       refresh();
     },
     [refresh, write]
@@ -256,7 +346,14 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
       await write(() =>
         on
           ? supabase.from('rs_item_assignments').delete().eq('item_id', itemId).eq('person_id', personId)
-          : supabase.from('rs_item_assignments').insert({ item_id: itemId, person_id: personId })
+          : supabase
+              .from('rs_item_assignments')
+              // (item_id, person_id) is the primary key, so a double tap is a
+              // duplicate and used to surface as a raw Postgres error.
+              .upsert([{ item_id: itemId, person_id: personId }], {
+                onConflict: 'item_id,person_id',
+                ignoreDuplicates: true
+              })
       );
       refresh();
     },
@@ -279,36 +376,59 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
     [claimed, refresh, write]
   );
 
-  const splitEvenly = useCallback(() => {
-    const rows = [];
-    for (const it of items) for (const p of crowd) rows.push({ item_id: it.id, person_id: p.id });
-    return bulkAssign(rows);
-  }, [items, crowd, bulkAssign]);
+  const assignAll = useCallback(
+    async (itemId, want) => {
+      if (want) {
+        await bulkAssign(crowd.map((p) => ({ item_id: itemId, person_id: p.id })));
+        return;
+      }
+      setAssignments((prev) => prev.filter((a) => a.item_id !== itemId));
+      await write(() => supabase.from('rs_item_assignments').delete().eq('item_id', itemId));
+      refresh();
+    },
+    [bulkAssign, crowd, refresh, write]
+  );
 
-  // Picked on the settle screen. Stored as the person's name because the table
-  // has a payer_name column and no payer_id.
-  const setPayer = useCallback((person) => patchReceipt({ payer_name: person.name }), [patchReceipt]);
+  const clearAssignments = useCallback(async () => {
+    const ids = items.map((it) => it.id);
+    if (!ids.length) return;
+    setAssignments([]);
+    await write(() => supabase.from('rs_item_assignments').delete().in('item_id', ids));
+    refresh();
+  }, [items, refresh, write]);
 
-  const restToPayer = useCallback(() => {
-    if (!payer) return;
-    return bulkAssign(split.unassignedItems.map((it) => ({ item_id: it.id, person_id: payer.id })));
-  }, [payer, split.unassignedItems, bulkAssign]);
+  // The id is what everything reads. The name rides along for the PDF header,
+  // which has no people to look an id up in.
+  const setPayer = useCallback(
+    (person) => patchReceipt({ payer_id: person.id, payer_name: person.name }),
+    [patchReceipt]
+  );
+
+  // An older split names its payer and has no id. Adopt one, once. A ref rather
+  // than a flag: the write triggers a refetch that runs this again before the
+  // new row lands, and a boolean would let the second pass through.
+  const adopted = useRef('');
+  useEffect(() => {
+    if (!id || receipt?.payer_id || !payer || adopted.current === id) return;
+    adopted.current = id;
+    patchReceipt({ payer_id: payer.id });
+  }, [id, receipt?.payer_id, payer, patchReceipt]);
 
   const savePersonField = useCallback(
-    async (id, key, value) => {
-      const current = people.find((p) => p.id === id);
+    async (pid, key, value) => {
+      const current = people.find((p) => p.id === pid);
       if (!current || (current[key] || '') === value) return;
-      setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, [key]: value } : p)));
-      await write(() => supabase.from('rs_people').update({ [key]: value }).eq('id', id));
+      setPeople((prev) => prev.map((p) => (p.id === pid ? { ...p, [key]: value } : p)));
+      await write(() => supabase.from('rs_people').update({ [key]: value }).eq('id', pid));
       refresh();
     },
     [people, refresh, write]
   );
 
   const setSettled = useCallback(
-    async (id, settled, via) => {
-      setPeople((prev) => prev.map((p) => (p.id === id ? { ...p, settled, settled_via: via } : p)));
-      await write(() => supabase.from('rs_people').update({ settled, settled_via: via }).eq('id', id));
+    async (pid, settled, via) => {
+      setPeople((prev) => prev.map((p) => (p.id === pid ? { ...p, settled, settled_via: via } : p)));
+      await write(() => supabase.from('rs_people').update({ settled, settled_via: via }).eq('id', pid));
       refresh();
     },
     [refresh, write]
@@ -316,7 +436,9 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
 
   const savePhoto = useCallback(
     async (blob) => {
-      const path = receiptId + '/' + Date.now() + '.jpg';
+      const rid = idRef.current || (await ensureReceipt());
+      if (!rid) return null;
+      const path = rid + '/' + Date.now() + '.jpg';
       const up = await supabase.storage.from('receipt-photos').upload(path, blob, {
         upsert: true,
         contentType: 'image/jpeg'
@@ -325,55 +447,82 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
         setError(up.error.message);
         return null;
       }
-      const { data } = supabase.storage.from('receipt-photos').getPublicUrl(path);
-      await patchReceipt({ photo_url: data.publicUrl });
-      return data.publicUrl;
+      // The PATH, never a public URL. Reads go through a signed URL, so the
+      // bucket can be private without breaking a link somebody already has.
+      await patchReceipt({ photo_url: path });
+      return path;
     },
-    [receiptId, patchReceipt]
+    [ensureReceipt, patchReceipt]
   );
 
   const shareUrl = typeof window === 'undefined' ? '' : window.location.href;
 
+  // A bare link in a group chat tells nobody what it is or why they should tap
+  // it. Every route out of here carries the name, the date and the total.
+  const shareName = (receipt?.title || '').trim() || 'Untitled split';
+  const shareText =
+    `${shareName}, ${prettyDate(receipt?.event_date)}. ` +
+    `Total ${money(shownTotal(split).cents)}. Tap your name to see what you owe.`;
+
   const shareSplit = useCallback(async () => {
     if (navigator.share) {
       try {
-        await navigator.share({ title: receipt?.title || 'Halfsies', url: shareUrl });
+        await navigator.share({ title: shareName, text: shareText, url: shareUrl });
       } catch {
         /* the sheet was closed */
       }
       return;
     }
     try {
-      await navigator.clipboard.writeText(shareUrl);
-      say('Link copied.');
+      await navigator.clipboard.writeText(shareText + '\n' + shareUrl);
+      say('Copied. Paste it in the group chat.');
     } catch {
       say(shareUrl);
     }
-  }, [receipt?.title, shareUrl, say]);
+  }, [shareName, shareText, shareUrl, say]);
 
-  const goStep = useCallback(
-    (step) => {
-      if (step > 5) {
-        markDone(receiptId);
-        setView({ mode: 'tabs', tab: 'settle' });
-      } else {
-        if (step === 5) markDone(receiptId);
-        setView({ mode: 'wizard', step });
-      }
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    },
-    [receiptId]
+  const api = useMemo(
+    () => ({
+      patchReceipt,
+      addPeople,
+      removePerson,
+      addItems,
+      removeItem,
+      toggleAssign,
+      assignAll,
+      bulkAssign,
+      clearAssignments,
+      setPayer,
+      savePersonField,
+      setSettled,
+      savePhoto
+    }),
+    [
+      patchReceipt,
+      addPeople,
+      removePerson,
+      addItems,
+      removeItem,
+      toggleAssign,
+      assignAll,
+      bulkAssign,
+      clearAssignments,
+      setPayer,
+      savePersonField,
+      setSettled,
+      savePhoto
+    ]
   );
 
   /* ---- render ---- */
 
-  if (status === 'loading' || !view) {
+  if (status === 'loading' || !receipt) {
     return (
       <div className="col plain">
         <header className="topbar">
           <Wordmark onClick={onExit} />
         </header>
-        <p className="empty">Loading</p>
+        <Skeleton rows={4} />
       </div>
     );
   }
@@ -384,7 +533,7 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
         <header className="topbar">
           <Wordmark onClick={onExit} />
         </header>
-        <div className="step">
+        <div className="sec">
           <h1>Split not found</h1>
           <p className="sub">This split does not exist, or it was deleted.</p>
           <button className="btn primary wide tall" style={{ marginTop: 20 }} onClick={onExit}>
@@ -396,121 +545,66 @@ export default function Receipt({ receiptId, startWizard, onExit, onMenu }) {
   }
 
   async function deleteSplit() {
-    if (!window.confirm('Delete this split for everyone who has the link?')) return;
-    const { error: e } = await supabase.from('rs_receipts').delete().eq('id', receiptId);
-    if (e) {
-      setError(e.message);
+    if (!id) {
+      onExit();
       return;
     }
-    forget(receiptId);
-    onExit();
-  }
-
-  const shared = {
-    receipt,
-    people: crowd,
-    items,
-    assignments,
-    claimed,
-    split,
-    byPerson,
-    payer,
-    payerName,
-    shareUrl,
-    say,
-    api: {
-      patchReceipt,
-      addPeople,
-      removePerson,
-      addItems,
-      removeItem,
-      toggleAssign,
-      splitEvenly,
-      restToPayer,
-      setPayer,
-      savePersonField,
-      setSettled,
-      savePhoto
+    const yes = await confirmSheet({
+      title: 'Delete this split?',
+      line: 'It disappears for everyone who has the link, and it cannot be brought back.',
+      confirm: 'Delete split'
+    });
+    if (!yes) return;
+    // The table itself refuses deletes. Only this RPC can remove a row, and only
+    // for a caller holding the token whose hash is on it.
+    const { data: gone, error: e } = await supabase.rpc('rs_delete_receipt', { p_id: id, p_token: tokenFor(id) });
+    if (e || !gone) {
+      setError(e ? e.message : 'This split can only be deleted on the phone that made it.');
+      return;
     }
-  };
-
-  const banner = (
-    <>
-      {flash && <p className="banner">{flash}</p>}
-      {error && <p className="banner bad">{error}</p>}
-    </>
-  );
-
-  const header = (
-    <header className="topbar">
-      <Wordmark onClick={onExit} />
-      <button className="icon-btn" onClick={shareSplit} aria-label="Share this split">
-        <IconShare />
-      </button>
-      <button className="icon-btn" onClick={onMenu} aria-label="Menu">
-        <IconMenu />
-      </button>
-    </header>
-  );
-
-  if (view.mode === 'wizard') {
-    return (
-      <div className="col">
-        {header}
-        <Progress step={view.step} />
-        {banner}
-        <div className="step" key={view.step}>
-          {view.step === 2 && <PeopleStep {...shared} onNext={() => goStep(3)} onBack={onExit} />}
-          {view.step === 3 && <ItemsStep {...shared} onNext={() => goStep(4)} onBack={() => goStep(2)} />}
-          {view.step === 4 && <AssignStep {...shared} onNext={() => goStep(5)} onBack={() => goStep(3)} />}
-          {view.step === 5 && <SettleStep {...shared} onDone={() => goStep(6)} onBack={() => goStep(4)} onDelete={deleteSplit} />}
-        </div>
-      </div>
-    );
+    // The row is gone and nothing points at the photo any more. A legacy http
+    // value is not a path, so there is nothing to remove for those.
+    const path = (receipt?.photo_url || '').trim();
+    if (path && !/^https?:/i.test(path)) await supabase.storage.from('receipt-photos').remove([path]);
+    forget(id); // also drops the token and the other per-receipt keys
+    onExit();
   }
 
   return (
     <div className="col">
-      {header}
-      <div className="step-head" style={{ marginBottom: 14 }}>
-        <button className="btn ghost sm" style={{ padding: 0, marginBottom: 2 }} onClick={onExit}>
-          <IconBack /> Back
+      <header className="topbar">
+        <Wordmark onClick={onExit} />
+        <button className="icon-btn" onClick={shareSplit} aria-label="Share this split" disabled={!id}>
+          <IconShare />
         </button>
-        <h1>{receipt.title || 'Untitled split'}</h1>
-        <p className="sub">
-          <span className="num">{money(split.grandCents)}</span> across {crowd.length}{' '}
-          {crowd.length === 1 ? 'person' : 'people'}
-          {unassignedCount > 0 ? ` with ${unassignedCount} unassigned` : ''}
-        </p>
-      </div>
-      <div className="tabs" role="tablist">
-        {TABS.map(([key, label]) => (
-          <button
-            key={key}
-            role="tab"
-            aria-selected={view.tab === key}
-            className={view.tab === key ? 'on' : ''}
-            onClick={() => setView({ mode: 'tabs', tab: key })}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {banner}
-      <div className="step" key={view.tab}>
-        {view.tab === 'items' && <AssignStep {...shared} embedded />}
-        {view.tab === 'people' && <PeopleStep {...shared} embedded />}
-        {view.tab === 'settle' && <SettleStep {...shared} embedded onDelete={deleteSplit} />}
-      </div>
+        <button className="icon-btn" onClick={onMenu} aria-label="Menu">
+          <IconMenu />
+        </button>
+      </header>
+
+      <button className="btn ghost sm back-row" onClick={onExit}>
+        <IconBack /> Back
+      </button>
+
+      {flash && <p className="banner">{flash}</p>}
+      {error && <p className="banner bad">{error}</p>}
+
+      <Split
+        receipt={receipt}
+        people={crowd}
+        items={items}
+        assignments={assignments}
+        claimed={claimed}
+        split={split}
+        byPerson={byPerson}
+        payer={payer}
+        payerName={payerName}
+        shareUrl={shareUrl}
+        trip={trip}
+        onOpenTrip={onOpenTrip}
+        api={api}
+        onDelete={id ? deleteHandler(id, deleteSplit) : null}
+      />
     </div>
   );
-}
-
-// Where to drop someone when the page opens.
-function decideView(receiptId, startWizard, people, items) {
-  if (startWizard) return { mode: 'wizard', step: 2 };
-  if (doneIds().includes(receiptId)) return { mode: 'tabs', tab: 'settle' };
-  // Somebody else already built this one out, so show the finished split.
-  if (people.length >= 2 && items.length > 0) return { mode: 'tabs', tab: 'settle' };
-  return { mode: 'wizard', step: people.length >= 2 ? 3 : 2 };
 }

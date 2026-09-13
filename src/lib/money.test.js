@@ -3,7 +3,7 @@
 // It fails loudly if the cent reconciliation breaks.
 
 import assert from 'node:assert/strict';
-import { splitReceipt, toCents, money, splitEvenCents } from './money.js';
+import { splitReceipt, toCents, money, parseBulkLines, reconcile, shownTotal, splitEvenCents } from './money.js';
 
 let checks = 0;
 function check(label, fn) {
@@ -236,6 +236,105 @@ check('a quantity line splits into rows that sum back to the line total', () => 
       assert.equal(rows.reduce((s, c) => s + c, 0), cents, `${cents} cents over ${qty}`);
     }
   }
+});
+
+check('the total never contradicts the tax line under it', () => {
+  const pair = [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }];
+  const items = [{ id: 'i1', name: 'Bowl', price: 20 }];
+
+  // Lines on the receipt and nobody assigned. grandCents is zero, and printing
+  // that above a real tax line reads as a free meal.
+  const none = splitReceipt({ people: pair, items, assignments: [], taxAmount: 1.8, tipAmount: 4 });
+  assert.equal(none.grandCents, 0);
+  assert.equal(none.billCents, 2580);
+  assert.deepEqual(shownTotal(none), { cents: 2580, nobodyCharged: true });
+
+  // One assignee and the charged total is the real one again.
+  const some = splitReceipt({
+    people: pair,
+    items,
+    assignments: [{ item_id: 'i1', person_id: 'a' }],
+    taxAmount: 1.8,
+    tipAmount: 4
+  });
+  assert.deepEqual(shownTotal(some), { cents: 2580, nobodyCharged: false });
+
+  // An empty receipt is not "nobody is charged yet", it is nothing at all.
+  const empty = splitReceipt({ people: pair, items: [], assignments: [] });
+  assert.deepEqual(shownTotal(empty), { cents: 0, nobodyCharged: false });
+});
+
+check('the reconciliation line matches the receipt or names the gap', () => {
+  // The three numbers the UI prints come straight off this.
+  assert.deepEqual(reconcile({ itemsCents: 5810, subtotalCents: 6174 }), {
+    readCents: 5810,
+    saysCents: 6174,
+    gapCents: 364,
+    matches: false
+  });
+
+  // Agreement within a cent is the reader rounding, not a missing line.
+  assert.equal(reconcile({ itemsCents: 6174, subtotalCents: 6174 }).matches, true);
+  assert.equal(reconcile({ itemsCents: 6173, subtotalCents: 6174 }).matches, true);
+  assert.equal(reconcile({ itemsCents: 6172, subtotalCents: 6174 }).matches, false);
+
+  // No subtotal printed, so it comes out of the total less tax and tip.
+  assert.deepEqual(reconcile({ itemsCents: 5810, taxCents: 464, tipCents: 900, totalCents: 7174 }), {
+    readCents: 5810,
+    saysCents: 5810,
+    gapCents: 0,
+    matches: true
+  });
+
+  // Read more than the receipt says, which is a line counted twice.
+  assert.equal(reconcile({ itemsCents: 6500, subtotalCents: 6174 }).gapCents, -326);
+
+  // Nothing to compare against.
+  assert.equal(reconcile({ itemsCents: 5810 }), null);
+  assert.equal(reconcile({ itemsCents: 5810, subtotalCents: 0, totalCents: 0 }), null);
+  // A total that is all tax leaves no positive subtotal to check.
+  assert.equal(reconcile({ itemsCents: 0, taxCents: 500, totalCents: 500 }), null);
+});
+
+check('a leftover cent never lands on somebody who ordered nothing', () => {
+  // Three at the table, two split a plate, one had nothing. A single cent of
+  // tax used to be handed to the third, who owed nothing at all: the sort tied
+  // on zero and broke by position.
+  const three = [{ id: 'c', name: 'Casey' }, { id: 'a', name: 'Avery' }, { id: 'b', name: 'Blake' }];
+  const items = [{ id: 'i1', name: 'Plate', price: 10 }];
+  const assignments = [
+    { item_id: 'i1', person_id: 'a' },
+    { item_id: 'i1', person_id: 'b' }
+  ];
+  const out = splitReceipt({ people: three, items, assignments, taxAmount: 0.01 });
+  const casey = out.perPerson.find((p) => p.id === 'c');
+  assert.equal(casey.totalCents, 0, 'ordered nothing, owes nothing');
+  assert.equal(out.perPerson.reduce((s, p) => s + p.totalCents, 0), out.grandCents);
+
+  // A real weight that floors to zero still gets its cent, so the filter is on
+  // the weight and never on the floored share.
+  const tiny = splitReceipt({
+    people: three,
+    items: [{ id: 'i2', name: 'Mint', price: 0.01 }],
+    assignments: [
+      { item_id: 'i2', person_id: 'a' },
+      { item_id: 'i2', person_id: 'b' }
+    ],
+    taxAmount: 0.01
+  });
+  assert.equal(tiny.perPerson.find((p) => p.id === 'c').totalCents, 0);
+  assert.equal(tiny.perPerson.reduce((s, p) => s + p.totalCents, 0), tiny.grandCents);
+});
+
+check('a pasted list keeps the thousands separator out of the price', () => {
+  assert.deepEqual(parseBulkLines('Bacon, 9.12\nPotatoes, 4.08'), [
+    { name: 'Bacon', price: 9.12 },
+    { name: 'Potatoes', price: 4.08 }
+  ]);
+  // Splitting on the last comma turned this into a 56 cent rug.
+  assert.deepEqual(parseBulkLines('Rug, 1,234.56'), [{ name: 'Rug', price: 1234.56 }]);
+  assert.deepEqual(parseBulkLines('Coffee beans, whole, $12'), [{ name: 'Coffee beans, whole', price: 12 }]);
+  assert.deepEqual(parseBulkLines('no price here\n\n  '), []);
 });
 
 console.log(`\n${checks} checks passed.`);

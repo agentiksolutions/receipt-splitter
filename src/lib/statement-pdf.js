@@ -5,7 +5,7 @@
 // screen it was generated from.
 
 import { jsPDF } from 'jspdf';
-import { money } from './money.js';
+import { money, shownTotal } from './money.js';
 
 const PAGE_W = 215.9; // letter, millimetres
 const PAGE_H = 279.4;
@@ -61,9 +61,9 @@ function prettyDate(value) {
   return `${MONTHS[parsed.getMonth()]} ${parsed.getDate()}, ${parsed.getFullYear()}`;
 }
 
-export function slugify(text) {
+export function slugify(value) {
   return (
-    String(text || '')
+    String(value || '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
@@ -74,6 +74,7 @@ export function slugify(text) {
 const HANDLE_FIELDS = [
   ['venmo', 'Venmo', '@'],
   ['cashapp', 'Cash App', '$'],
+  ['paypal', 'PayPal', 'paypal.me/'],
   ['zelle', 'Zelle', ''],
   ['phone', 'Phone', ''],
   ['email', 'Email', '']
@@ -109,7 +110,12 @@ export function buildStatementPdf({
   const title = (receipt?.title || '').trim() || 'Untitled split';
 
   drawHeader(doc, state);
-  drawTitleBlock(doc, state, { title, date: prettyDate(receipt?.event_date || receipt?.created_at), payerName });
+  drawTitleBlock(doc, state, {
+    title,
+    merchant: (receipt?.merchant || '').trim(),
+    date: prettyDate(receipt?.event_date || receipt?.created_at),
+    payerName
+  });
 
   const person = forPersonId ? people.find((p) => p.id === forPersonId) : null;
   if (person) {
@@ -163,19 +169,26 @@ function drawHeader(doc, state) {
   state.y += 6;
 
   setType(doc, 9, 'normal', GRAY);
-  text(doc, "When your math isn't mathing, go halfsies.", PAGE_W / 2, state.y, { align: 'center' });
   state.y += 5;
 
   rule(doc, state, BLUE, 0.4);
   state.y += 10;
 }
 
-function drawTitleBlock(doc, state, { title, date, payerName }) {
+function drawTitleBlock(doc, state, { title, merchant, date, payerName }) {
   setType(doc, 16, 'bold');
   const lines = doc.splitTextToSize(title, WIDTH);
   for (const line of lines) {
     text(doc, line, MARGIN, state.y);
     state.y += 7;
+  }
+
+  // Where the receipt came from, when the reader could see it. Skipped when the
+  // merchant is already the title, which is what a photo read leaves behind.
+  if (merchant && merchant.toLowerCase() !== title.trim().toLowerCase()) {
+    setType(doc, 11, 'normal', GRAY);
+    text(doc, merchant, MARGIN, state.y);
+    state.y += 6;
   }
 
   const parts = [];
@@ -399,23 +412,165 @@ export function canShareFiles() {
  * Share the PDF if the device has a share sheet, otherwise download it.
  * Called straight from a click so iOS still counts it as a user gesture.
  */
-export function deliverPdf(blob, filename, title) {
+export function deliverPdf(blob, filename, title, onFallback) {
+  const download = () => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
   try {
     const file = new File([blob], filename, { type: 'application/pdf' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      navigator.share({ files: [file], title }).catch(() => {});
+      navigator.share({ files: [file], title }).catch((err) => {
+        // Closing the sheet is a decision, not a failure. Anything else means
+        // the share did not happen, and the file has to reach them some other
+        // way rather than disappearing without a word.
+        if (err && err.name === 'AbortError') return;
+        download();
+        onFallback?.();
+      });
       return 'share';
     }
   } catch {
     // fall through to the download
   }
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  download();
   return 'download';
+}
+
+// --- the whole trip ---------------------------------------------------------
+
+/**
+ * One statement covering every split in a trip: the log, the totals table and
+ * the who-owes-who list. With forKey set it narrows to that person's lines.
+ * @returns {Blob}
+ */
+export function buildTripPdf({
+  trip,
+  rows = [],
+  balances = [],
+  moves = [],
+  totalCents = 0,
+  meName = '',
+  forKey = null,
+  shareUrl = ''
+}) {
+  const doc = new jsPDF({ unit: 'mm', format: 'letter' });
+  doc.setFont('helvetica', 'normal');
+  const state = { y: MARGIN };
+
+  const key = (name) => String(name || '').trim().toLowerCase();
+  const label = (name) => (meName && key(name) === key(meName) ? 'You' : name);
+
+  const dates = rows.map((r) => r.receipt.event_date).filter(Boolean).sort();
+  const span =
+    dates.length === 0
+      ? prettyDate(trip?.start_date)
+      : dates[0] === dates[dates.length - 1]
+        ? prettyDate(dates[0])
+        : prettyDate(dates[0]) + ' to ' + prettyDate(dates[dates.length - 1]);
+
+  drawHeader(doc, state);
+  const mine = forKey ? balances.find((b) => b.key === forKey) : null;
+  drawTitleBlock(doc, state, {
+    title: (trip?.title || '').trim() || 'Untitled trip',
+    date: span,
+    payerName: ''
+  });
+
+  if (mine) {
+    setType(doc, 12, 'bold');
+    text(doc, 'Statement for ' + label(mine.name), MARGIN, state.y);
+    state.y += 8;
+  }
+
+  setType(doc, 12, 'bold');
+  text(doc, 'The log', MARGIN, state.y);
+  state.y += 8;
+  tableHead(doc, state, 'Split', 'Total');
+
+  for (const r of rows) {
+    ensure(doc, state, 14);
+    setType(doc, 10, 'normal');
+    text(doc, r.receipt.title || 'Untitled split', MARGIN, state.y);
+    text(doc, money(shownTotal(r.split).cents), RIGHT, state.y, { align: 'right' });
+    state.y += 5;
+    setType(doc, 9, 'normal', GRAY);
+    const who = mine
+      ? r.split.perPerson.filter((p) => key(p.name) === forKey)
+      : r.split.perPerson;
+    const parts = who.map((p) => `${label(p.name)} ${money(p.totalCents)}`);
+    const line = [prettyDate(r.receipt.event_date), r.receipt.category, parts.join(', ')]
+      .filter(Boolean)
+      .join('  ·  ');
+    for (const part of doc.splitTextToSize(line, WIDTH)) {
+      text(doc, part, MARGIN, state.y);
+      state.y += 4.5;
+    }
+    state.y += 3;
+  }
+
+  state.y += 2;
+  rule(doc, state);
+  state.y += 6;
+  setType(doc, 11, 'bold');
+  text(doc, 'Trip total', MARGIN, state.y);
+  setType(doc, 14, 'bold');
+  text(doc, money(totalCents), RIGHT, state.y, { align: 'right' });
+  state.y += 14;
+
+  ensure(doc, state, 30);
+  setType(doc, 12, 'bold');
+  text(doc, 'Trip totals', MARGIN, state.y);
+  state.y += 8;
+  setType(doc, 9, 'bold', GRAY);
+  text(doc, 'Name', MARGIN, state.y);
+  text(doc, 'Paid', COLS.tax, state.y, { align: 'right' });
+  text(doc, 'Owed', COLS.total, state.y, { align: 'right' });
+  text(doc, 'Net', RIGHT, state.y, { align: 'right' });
+  state.y += 2;
+  rule(doc, state);
+  state.y += 5;
+
+  for (const b of balances) {
+    ensure(doc, state, 8);
+    setType(doc, 10, 'normal');
+    text(doc, label(b.name), MARGIN, state.y);
+    text(doc, money(b.paidCents), COLS.tax, state.y, { align: 'right' });
+    text(doc, money(b.owedCents), COLS.total, state.y, { align: 'right' });
+    doc.setFont('helvetica', 'bold');
+    text(doc, money(b.netCents), RIGHT, state.y, { align: 'right' });
+    state.y += 6.5;
+  }
+
+  state.y += 8;
+  ensure(doc, state, 24);
+  setType(doc, 12, 'bold');
+  text(doc, 'Who owes who', MARGIN, state.y);
+  state.y += 8;
+
+  const shown = mine ? moves.filter((m) => m.fromKey === forKey || m.toKey === forKey) : moves;
+  if (shown.length === 0) {
+    setType(doc, 10, 'normal', GRAY);
+    text(doc, 'Everyone is square.', MARGIN, state.y);
+    state.y += 6;
+  } else {
+    for (const m of shown) {
+      ensure(doc, state, 8);
+      setType(doc, 10, 'normal');
+      text(doc, `${label(m.from)} ${label(m.from) === 'You' ? 'owe' : 'owes'} ${label(m.to)}`, MARGIN, state.y);
+      doc.setFont('helvetica', 'bold');
+      text(doc, money(m.cents), RIGHT, state.y, { align: 'right' });
+      state.y += 6.5;
+    }
+  }
+
+  drawFooters(doc, shareUrl);
+  return doc.output('blob');
 }

@@ -8,6 +8,7 @@
   --ink: #0f172a;
   --muted: #64748b;
   --line: #e2e8f0;
+  --line-strong: #c2cbd8;
   --brand: #1d4ed8;
   --brand-2: #3b82f6;
   --brand-soft: #eff4ff;
@@ -17,6 +18,18 @@
   --warn: #b45309;
   --warn-soft: #fffbeb;
   --danger: #dc2626;
+
+  /* Payment services. The name is set in these; there are no logo marks. */
+  /* Measured on #ffffff: 5.03 and 4.96. The brand blues and greens as shipped
+     were 3.39 and 3.16, under the 4.5 a body-weight label needs. */
+  --venmo: #0a6fce;
+  --cashapp: #00822f;
+  --paypal: #003087;
+  --zelle: #6d1ed4;
+  --applecash: #0f172a;
+
+  --hero-from: #1d4ed8;
+  --hero-to: #3b82f6;
 
   --sh-1: 0 1px 2px rgba(16, 24, 40, 0.06);
   --sh-2: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.08);
@@ -40,6 +53,7 @@
     --ink: #e8edf7;
     --muted: #94a3b8;
     --line: #24304c;
+    --line-strong: #3a4a6b;
     --brand: #3b82f6;
     --brand-2: #60a5fa;
     --brand-soft: #17233f;
@@ -48,6 +62,15 @@
     --warn: #fbbf24;
     --warn-soft: #251d0c;
     --danger: #f87171;
+    /* Lifted, because the light-mode versions of these disappear into a dark
+       card. Apple Cash is black on white and has to invert outright. */
+    --venmo: #4dabff;
+    --cashapp: #35e06a;
+    --paypal: #6f8fd8;
+    --zelle: #a76ff0;
+    --applecash: #e8edf7;
+    --hero-from: #16307c;
+    --hero-to: #1e50b5;
     --sh-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --sh-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
     --sh-dock: 0 -8px 24px rgba(0, 0, 0, 0.4);
@@ -114,6 +137,7 @@ a { color: var(--brand); }
 }
 
 .wordmark {
+  min-height: 44px;
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -129,27 +153,6 @@ a { color: var(--brand); }
 }
 
 .wordmark svg { flex: none; }
-
-/* ---------- progress ------------------------------------------------- */
-
-.progress { display: flex; gap: 6px; padding: 4px 0 18px; }
-
-.progress span {
-  height: 4px;
-  flex: 1;
-  border-radius: 999px;
-  background: var(--line);
-  transition: background 180ms ease-out;
-}
-
-.progress span.on { background: var(--brand); }
-
-.step-count {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--brand);
-  margin-bottom: 6px;
-}
 
 /* ---------- headings ------------------------------------------------- */
 
@@ -180,7 +183,7 @@ h3 { font-size: 15px; font-weight: 600; }
   padding: 22px 20px;
   margin-bottom: 12px;
   color: #fff;
-  background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%);
+  background: linear-gradient(135deg, var(--hero-from) 0%, var(--hero-to) 100%);
   box-shadow: var(--sh-2);
 }
 
@@ -220,11 +223,11 @@ h3 { font-size: 15px; font-weight: 600; }
 .btn.soft { background: var(--brand-soft); color: var(--brand); }
 .btn.wide { width: 100%; }
 .btn.tall { min-height: 52px; font-size: 17px; }
-.btn.sm { min-height: 40px; padding: 0 14px; font-size: 14px; border-radius: 10px; }
+.btn.sm { min-height: 44px; padding: 0 14px; font-size: 14px; border-radius: 10px; }
 
 .icon-btn {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   flex: none;
   display: grid;
   place-items: center;
@@ -331,22 +334,36 @@ select {
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 
+/* THE chip. One rule for the toggles, the people and the filters; the only
+   difference between them is whether a remove button is inside. Vertical
+   padding is zero so a 44px remove button cannot push the chip past 44. */
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-height: 44px;
-  padding: 4px 6px 4px 4px;
+  padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
   font-size: 15px;
   font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
 }
-
-.chip .x {
-  width: 28px;
-  height: 28px;
+button.chip { font-size: 14px; color: var(--muted); }
+.chip.on { background: var(--brand-soft); border-color: transparent; color: var(--brand); font-weight: 600; }
+.chip .av { opacity: 0.4; transition: opacity 150ms ease-out; }
+.chip.on .av { opacity: 1; }
+.chip[disabled] { opacity: 0.4; cursor: default; }
+/* An avatar or a glyph sits tight to the edge; a remove button owns the end. */
+.chip:has(.av) { padding-left: 3px; }
+.chip:has(.chip-x) { padding-right: 0; }
+.chip-x {
+  width: 44px;
+  height: 44px;
+  flex: none;
   border: 0;
   border-radius: 50%;
   background: transparent;
@@ -355,29 +372,11 @@ select {
   line-height: 1;
   cursor: pointer;
 }
+.chip-x[disabled] { opacity: 0.4; cursor: default; }
 
-.chip.payer { background: var(--brand-soft); border-color: transparent; }
+
 .chip .tag { font-size: 12px; color: var(--brand); font-weight: 600; padding-right: 8px; }
 
-.tap {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 40px;
-  padding: 3px 12px 3px 3px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
-}
-
-.tap .av { opacity: 0.4; transition: opacity 150ms ease-out; }
-.tap.on { background: var(--brand-soft); border-color: transparent; color: var(--brand); font-weight: 600; }
-.tap.on .av { opacity: 1; }
 
 /* ---------- lists ---------------------------------------------------- */
 
@@ -533,7 +532,7 @@ select {
 
 .seg button {
   flex: 1;
-  min-height: 38px;
+  min-height: 44px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -545,29 +544,6 @@ select {
 }
 
 .seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--sh-1); }
-
-.tabs {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 12px;
-  background: var(--sunken);
-  margin-bottom: 16px;
-}
-
-.tabs button {
-  flex: 1;
-  min-height: 44px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 15px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.tabs button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: var(--sh-1); }
 
 /* ---------- settle --------------------------------------------------- */
 
@@ -587,7 +563,7 @@ select {
   align-items: center;
   gap: 6px;
   width: 100%;
-  min-height: 40px;
+  min-height: 44px;
   margin-top: 8px;
   padding: 0;
   border: 0;
@@ -606,6 +582,25 @@ select {
 }
 
 .pays { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+/* Five buttons in a two-column grid leaves the last one alone. Let it run wide. */
+.pays .pay-cell:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.pay-cell { display: flex; flex-direction: column; gap: 4px; }
+.pay-cell .pay { width: 100%; }
+
+/* Venmo and the two text-only services cannot put the amount in the app, so the
+   amount is one tap from the clipboard instead of a retype. */
+.copy-amt {
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+.copy-amt:active { opacity: 0.6; }
 
 .pay {
   display: flex;
@@ -623,12 +618,16 @@ select {
   cursor: pointer;
 }
 
-.pay svg { flex: none; }
-.pay.v-venmo { color: #008cff; }
-.pay.v-cashapp { color: #00d632; }
-.pay.v-zelle { color: #6d1ed4; }
-.pay.v-applepay { color: var(--ink); }
-.pay.off { opacity: 0.35; pointer-events: none; }
+/* The service NAME is the mark. Weight 700 in the brand colour, pill shape. */
+.pay { font-weight: 700; }
+.pay.v-venmo, .mk-brand.v-venmo { color: var(--venmo); }
+.pay.v-cashapp, .mk-brand.v-cashapp { color: var(--cashapp); }
+.pay.v-paypal, .mk-brand.v-paypal { color: var(--paypal); }
+.pay.v-zelle, .mk-brand.v-zelle { color: var(--zelle); }
+.pay.v-applepay, .mk-brand.v-applepay { color: var(--applecash); }
+.mk-brand { font-weight: 700; }
+/* A service with no handle yet is not dead: tapping it asks for the handle. */
+.pay.off { opacity: 0.45; border-style: dashed; }
 
 .qr {
   display: flex;
@@ -648,14 +647,121 @@ select {
 .breakdown div span:first-child { color: var(--muted); padding-right: 12px; }
 .breakdown div.sub-line { color: var(--muted); }
 
-/* ---------- step transition ------------------------------------------ */
+/* ---------- the one page --------------------------------------------- */
 
-.step { animation: step-in 180ms ease-out; }
+/* Each section is a band of the same scroll. A newly unlocked one fades in
+   once; scroll-margin keeps the sticky header off it when the page walks down. */
+.sec { margin-bottom: 30px; scroll-margin-top: 68px; }
+.sec:last-of-type { margin-bottom: 0; }
+.sec > h2 { margin-bottom: 4px; }
+.sec-new { animation: sec-in 200ms ease-out; }
 
-@keyframes step-in {
+@keyframes sec-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
 }
+
+.back-row { padding: 0; margin-bottom: 10px; }
+
+/* ---------- your profile --------------------------------------------- */
+
+/* The menu slides in from the side. The profile is a form, so it comes up from
+   the bottom at the full column width instead of squeezing into a rail. */
+.profile-wrap .sheet.profile {
+  top: auto;
+  right: 50%;
+  bottom: 0;
+  width: min(var(--col), 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 18px 18px 0 0;
+  padding: 20px 16px calc(20px + var(--safe));
+  box-shadow: 0 -12px 32px rgba(15, 23, 42, 0.16);
+  transform: translate(50%, 100%);
+}
+.profile-wrap.open .sheet.profile { transform: translate(50%, 0); }
+.svc { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.svc:last-of-type { border-bottom: 0; }
+.svc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.svc-use,
+.svc-first {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 15px;
+  cursor: pointer;
+}
+.svc-first { font-size: 13px; color: var(--muted); }
+.svc-first.off { opacity: 0.4; }
+.svc-use input,
+.svc-first input { width: 20px; height: 20px; accent-color: var(--brand); }
+.scan-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; }
+.scan-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+/* Sits above the sticky bar so it never covers the button it is talking about. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(118px + var(--safe));
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(var(--col), 100%);
+  margin: 0 var(--pad);
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 14px;
+  box-shadow: var(--sh-2, 0 8px 24px rgba(15, 23, 42, 0.24));
+  animation: reveal 180ms ease-out;
+}
+.toast-do {
+  border: 0;
+  background: none;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 4px 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+/* A name on a chip is a button, because tapping it renames the person. */
+/* The name is the rename button. It stretches to the chip so the tap target is
+   the whole 44, not the 22 the text happens to occupy. */
+.chip-name {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.chip.editing { padding: 0 8px 0 3px; }
+.chip-input {
+  width: 8ch;
+  min-width: 6ch;
+  border: 0;
+  border-bottom: 1px solid var(--brand);
+  background: none;
+  font: inherit;
+  color: inherit;
+  padding: 0 2px;
+  min-height: 44px;
+}
+.chip-input:focus { outline: none; }
+
+.bill-everyone { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.bill-x { margin-left: 8px; font-size: 20px; line-height: 1; color: var(--muted); min-height: 44px; min-width: 44px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
@@ -806,8 +912,8 @@ select {
 .amount-row { display: flex; gap: 8px; align-items: stretch; }
 .amount-row > input { flex: 1; min-width: 0; }
 
-.seg.unit { flex: none; width: 88px; padding: 3px; }
-.seg.unit button { min-height: 42px; font-size: 15px; font-weight: 600; }
+.seg.unit { flex: none; width: 96px; padding: 3px; }
+.seg.unit button { min-height: 44px; font-size: 15px; font-weight: 600; }
 .seg.unit button[disabled] { opacity: 0.35; cursor: default; }
 
 .amount .result { margin-top: 6px; font-size: 13px; font-weight: 500; color: var(--muted); }
@@ -917,4 +1023,167 @@ select {
   box-shadow: var(--sh-1);
   color: inherit;
   font: inherit;
+}
+
+/* ---------- the bill, one line per item ------------------------------- */
+
+.assign-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 12px 0 10px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--line);
+}
+
+.owe-row { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.owe { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.owe .who { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.owe .num { font-size: 18px; font-weight: 600; }
+.owe-note { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+
+.bill-lines { display: flex; flex-direction: column; }
+
+.bill-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.bill-line:last-child { border-bottom: 0; }
+
+.bill-what { flex: 1 1 38%; min-width: 96px; display: flex; flex-direction: column; gap: 2px; }
+.bill-name { font-size: 17px; line-height: 1.25; }
+.bill-price { font-size: 14px; color: var(--muted); }
+
+.pills { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
+
+.pill {
+  min-height: 44px;
+  min-width: 56px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+.pill.on { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
+
+.choice.on { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand) inset; }
+.choice.on .t b { color: var(--brand); }
+
+.field-label { display: block; font-size: 13px; font-weight: 500; color: var(--muted); margin: 14px 0 8px; }
+.chips.cats .chip { font-size: 14px; padding: 0 12px; gap: 6px; }
+
+.swipe-hold { position: relative; z-index: 1; touch-action: pan-y; cursor: pointer; }
+.swipe-hold.glide { transition: transform 200ms ease; }
+.trip-card { border-left: 3px solid var(--brand); }
+.recent-card .cat { display: inline-flex; align-items: center; color: var(--muted); margin-right: 6px; }
+.log-people { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.two-up { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+
+/* ---------- confirm sheet ---------------------------------------------- */
+
+.ask-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.ask-veil { position: absolute; inset: 0; border: 0; padding: 0; background: rgba(15, 23, 42, 0.45); }
+
+.ask {
+  position: relative;
+  width: min(var(--col), 100%);
+  padding: 22px var(--pad) calc(16px + var(--safe));
+  background: var(--surface);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  box-shadow: 0 -12px 32px rgba(15, 23, 42, 0.24);
+  animation: rise 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.ask h2 { font-size: 19px; letter-spacing: -0.015em; }
+.ask p { color: var(--muted); font-size: 15px; line-height: 1.45; margin: 8px 0 20px; }
+.ask .btn + .btn { margin-top: 8px; }
+
+@keyframes rise {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.btn.danger { background: var(--danger); color: #fff; }
+
+/* The hero when the bill is real but nobody has been assigned to any of it. */
+.hero-note { font-size: 13px; opacity: 0.85; margin-top: 6px; }
+
+/* Do the lines read off the photo add up to what the receipt printed? */
+.recon {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.recon.ok { background: var(--good-soft); color: var(--good); font-weight: 600; }
+
+/* Finish-the-list shortcuts, in the sticky header above the lines. */
+.assign-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.chips.tips { margin-top: 4px; }
+
+/* The collapsed person card shows exactly one way to pay. */
+.pays.one { grid-template-columns: 1fr; }
+
+/* ---------- empty states and skeletons --------------------------------- */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+.empty-state p { font-size: 15px; max-width: 30ch; }
+.empty-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--sunken);
+  color: var(--muted);
+}
+
+.skeleton { display: flex; flex-direction: column; gap: 10px; }
+.sk-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+}
+.sk-line {
+  height: 12px;
+  width: 45%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--sunken) 0%, var(--line) 50%, var(--sunken) 100%);
+  background-size: 200% 100%;
+  animation: sk-slide 1200ms linear infinite;
+}
+.sk-line.wide { width: 75%; height: 15px; }
+
+@keyframes sk-slide {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
 }

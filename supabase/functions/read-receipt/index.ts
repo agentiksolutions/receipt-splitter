@@ -19,6 +19,7 @@ Return ONLY a JSON object, no prose, no code fence, with this shape:
 {
   "merchant": string | null,
   "date": "YYYY-MM-DD" | null,
+  "time": "HH:MM" (24-hour) | null,
   "items": [{ "name": string, "price": number, "qty": number }],
   "subtotal": number | null,
   "tax": number | null,
@@ -30,6 +31,7 @@ Rules:
 - Keep item names short and readable (title case, drop SKU codes and modifiers like "NO ONION" unless they carry a price).
 - Skip subtotal, tax, tip, total, payment, change, and header/footer lines from items; report those in their own fields.
 - Prices are numbers in dollars (12.4 not "$12.40").
+- merchant is the store or restaurant name as printed, in title case, without address or phone.
 - If a value is not visible, use null. Never invent an item.`;
 
 function json(body: unknown, status = 200) {
@@ -109,7 +111,8 @@ Deno.serve(async (req: Request) => {
     const num = (v: unknown) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
     return json({
       merchant: parsed.merchant ?? null,
-      date: parsed.date ?? null,
+      date: typeof parsed.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null,
+      time: typeof parsed.time === "string" && /^\d{2}:\d{2}$/.test(parsed.time) ? parsed.time : null,
       items,
       subtotal: num(parsed.subtotal),
       tax: num(parsed.tax),

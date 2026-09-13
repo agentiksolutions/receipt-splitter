@@ -15,6 +15,12 @@ function readUnit(name) {
   }
 }
 
+// A photo read hands over real dollars, so the field has to be in dollars when
+// it lands. Otherwise a remembered "%" reads $18.55 as 18.55 percent.
+export function forceDollars(name) {
+  writeUnit(name, '$');
+}
+
 function writeUnit(name, unit) {
   try {
     localStorage.setItem(storeKey(name), unit);
@@ -43,8 +49,20 @@ function centsFromRaw(raw, unit, baseCents) {
  * @param {number} cents      the dollar amount already stored, in cents
  * @param {function} onChange fires on every keystroke with the dollar cents
  * @param {function} onCommit fires on blur with the dollar cents
+ * @param {boolean} autoWrite  may the base effect write a recomputed amount?
+ *   Only the device that owns the split may. A viewer whose remembered unit is
+ *   "%" would otherwise reprice somebody else's tip the moment a new item
+ *   lands. Their own typing still commits; this is about the automatic write.
  */
-export default function AmountField({ label, unitKey, baseCents = 0, cents = 0, onChange, onCommit }) {
+export default function AmountField({
+  label,
+  unitKey,
+  baseCents = 0,
+  cents = 0,
+  autoWrite = true,
+  onChange,
+  onCommit
+}) {
   const [unit, setUnit] = useState(() => readUnit(unitKey));
   const [raw, setRaw] = useState(() => {
     if (readUnit(unitKey) === '%') return pctFromCents(cents, baseCents);
@@ -78,6 +96,12 @@ export default function AmountField({ label, unitKey, baseCents = 0, cents = 0, 
       return;
     }
     if (raw === '') return;
+    if (!autoWrite) {
+      // Not ours to rewrite. Show what the stored dollars come to against the
+      // new subtotal and leave the row alone.
+      setRaw(pctFromCents(cents, baseCents));
+      return;
+    }
     send(centsFromRaw(raw, unit, baseCents));
     // Only a change in the base should run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
