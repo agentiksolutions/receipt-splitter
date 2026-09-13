@@ -27,15 +27,62 @@ const HANDLES = [
   { key: 'email', label: 'Email', type: 'email' }
 ];
 
-// Which single field a greyed payment button is missing, so tapping it can ask
-// for that one thing instead of opening a form of six.
-const ADD_FIELD = {
+// The handle behind each payment button. Labels start lower case because they
+// are only ever read after "Your" or after somebody's name.
+const HANDLE = {
   venmo: { key: 'venmo', label: 'Venmo username', hint: 'The name on the Venmo profile.', type: 'text' },
   cashapp: { key: 'cashapp', label: 'Cash App cashtag', hint: 'With or without the $.', type: 'text' },
   paypal: { key: 'paypal', label: 'PayPal.Me name', hint: 'The last part of a paypal.me link.', type: 'text' },
   zelle: { key: 'zelle', label: 'Zelle phone or email', hint: 'Whatever the bank has on file.', type: 'text' },
-  applepay: { key: 'phone', label: 'Phone number', hint: 'Apple Cash goes over iMessage.', type: 'tel' }
+  applepay: { key: 'phone', label: 'phone number', hint: 'Apple Cash goes over iMessage.', type: 'tel' }
 };
+
+/**
+ * Which handles a greyed payment button is missing, and whose they are.
+ *
+ * A request is a text asking a friend for money, so the link is built from the
+ * REQUESTER's handles. Venmo needs a second one: its charge screen only opens
+ * with the amount already in it when the app scheme knows the friend's
+ * username, and without that the button falls back to the plain text.
+ *
+ * Asking for one handle and calling it "yours" underneath the friend's name,
+ * next to the friend's avatar, is how somebody typed the friend's username into
+ * their own profile and texted him asking him to pay himself. So every field
+ * here carries its owner in its own label, and both are on screen at once.
+ *
+ * `save` is the writer, and it is not the same thing as the label:
+ *   link  the handle the payment link is built FROM. onAddHandle puts it where
+ *         the mode says it goes: my profile on a request, the payer's row on a
+ *         send. This is always the first field and always required.
+ *   card  the handle of the person this card is about, written to their row.
+ *
+ * @param {string} service  venmo | cashapp | paypal | zelle | applepay
+ * @param {'request'|'send'} mode
+ * @param {string} them  the OTHER party's name: the friend being asked on a
+ *   request, the person being paid on a send. May be empty.
+ * @param {object} person  the row this card is about, for a value already saved
+ */
+function handleFields(service, mode, them, person) {
+  const base = HANDLE[service];
+  if (!base) return [];
+  const theirs = them ? them + "'s" : 'Their';
+  // Send builds every link from the other person's handles. Nothing of mine
+  // goes into one, so there is only ever the one field.
+  if (mode === 'send') return [{ ...base, save: 'link', label: theirs + ' ' + base.label, value: '' }];
+
+  const mine = { ...base, save: 'link', label: 'Your ' + base.label, value: '' };
+  if (service !== 'venmo') return [mine];
+  return [
+    mine,
+    {
+      ...base,
+      save: 'card',
+      label: theirs + ' Venmo username (optional)',
+      hint: 'Add it and Venmo opens with the amount already in it. Leave it blank if you do not know it.',
+      value: (person.venmo || '').trim()
+    }
+  ];
+}
 
 async function copy(text, said) {
   try {
@@ -59,12 +106,15 @@ async function copy(text, said) {
  * @param {?object} me       in request mode, the requester's own handles
  * @param {boolean} savedAsFile  a PDF has actually come down as a file, so the
  *   note about email attachments is a fact rather than a guess.
- * @param {function} onAddHandle (service, fieldKey, value) for a service with no
- *   handle. The service key is separate because applepay writes the phone
- *   column, so the column alone cannot say which service was asked for.
- *   Which side is missing depends on the mode: a REQUEST link is built from the
- *   requester's handles, a SEND link from the target's, so the caller owns
- *   deciding where the answer is written.
+ * @param {function} onAddHandle (service, fieldKey, value) for the handle the
+ *   payment link is built from. The service key is separate because applepay
+ *   writes the phone column, so the column alone cannot say which service was
+ *   asked for. Which side that is depends on the mode: a REQUEST link is built
+ *   from the requester's handles, a SEND link from the target's, so the caller
+ *   owns deciding where the answer is written.
+ * @param {function} onSaveField (personId, fieldKey, value) for a handle
+ *   belonging to the person this card is about. The Venmo sheet asks for one on
+ *   a request, because the charge screen needs the friend's username.
  */
 export default function PersonCard({
   person,
@@ -146,7 +196,7 @@ export default function PersonCard({
   // A request link is "text them asking for money", built from MY handles. A
   // send link is built from theirs. So a greyed button is missing a different
   // person's handle in each mode, and the sheet has to say whose.
-  const handleOwner = mode === 'send' ? target?.name || 'They' : 'You';
+  const them = (mode === 'send' ? target?.name : person.name) || '';
 
   // Marking somebody paid should not need a second decision. Whatever button
   // was just tapped is the answer, and the picker under More overrides it.
@@ -217,7 +267,14 @@ export default function PersonCard({
   const venmoQr = mode === 'send' ? links.venmo : venmoProfileLink(me || {});
   const qrValue = venmoQr || shareUrl;
   const owesLine = mode === 'send' ? 'you owe ' + (payerName || 'the payer') : 'owes ' + (payerName || 'the payer');
-  const field = adding ? ADD_FIELD[adding] : null;
+  const asking = adding ? handleFields(adding, mode, them, person) : [];
+  // Every request goes out as a text, whichever service it names, so one line
+  // covers all five. A send is the mirror and needs the other person's handle.
+  const askLead =
+    mode === 'send'
+      ? 'Paying ' + (them || 'them') + ' this way needs their handle.'
+      : 'This sends ' + (them || 'them') + ' a text asking for the money. Your handle goes in it, so the money ' +
+        'comes back to you.';
 
   return (
     <div className="card">
@@ -373,13 +430,21 @@ export default function PersonCard({
         </div>
       )}
 
-      {field && (
+      {asking.length > 0 && (
         <HandleSheet
-          field={field}
-          who={handleOwner}
+          title={SERVICE_LABELS[adding]}
+          lead={askLead}
+          fields={asking}
           onCancel={() => setAdding(null)}
-          onSave={(value) => {
-            onAddHandle?.(adding, field.key, value);
+          onSave={(values) => {
+            for (const f of asking) {
+              const v = (values[f.save + ':' + f.key] || '').trim();
+              if (!v) continue;
+              // 'link' goes wherever the mode says the link is built from, and
+              // only the caller knows that. 'card' is this person's own row.
+              if (f.save === 'link') onAddHandle?.(adding, f.key, v);
+              else onSaveField?.(person.id, f.key, v);
+            }
             setAdding(null);
           }}
         />
@@ -388,10 +453,13 @@ export default function PersonCard({
   );
 }
 
-// One field, one Save. Tapping a payment button nobody has a handle for should
-// ask for that handle and nothing else.
-function HandleSheet({ field, who, onCancel, onSave }) {
-  const [value, setValue] = useState('');
+// One Save, and a box for each handle the button is missing, each labelled with
+// whose it is. The first field is the one the link cannot be built without, so
+// Save stays off until it has something in it.
+function HandleSheet({ title, lead, fields, onCancel, onSave }) {
+  const [values, setValues] = useState(() =>
+    Object.fromEntries(fields.map((f) => [f.save + ':' + f.key, f.value || '']))
+  );
 
   useEffect(() => {
     const onKey = (e) => {
@@ -401,33 +469,37 @@ function HandleSheet({ field, who, onCancel, onSave }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onCancel]);
 
+  const ready = Boolean((values[fields[0].save + ':' + fields[0].key] || '').trim());
+
   function save() {
-    const v = value.trim();
-    if (!v) return;
-    onSave(v);
+    if (ready) onSave(values);
   }
 
   return (
-    <div className="ask-wrap" role="dialog" aria-modal="true" aria-label={field.label}>
+    <div className="ask-wrap" role="dialog" aria-modal="true" aria-label={title}>
       <button className="ask-veil" aria-label="Cancel" onClick={onCancel} />
       <div className="ask">
-        <h2>{field.label}</h2>
-        <p>
-          {who === 'You' ? 'Add yours' : 'Add ' + who + "'s"} and this button starts working. {field.hint}
-        </p>
-        <label className="field">
-          <span>{field.label}</span>
-          <input
-            type={field.type}
-            value={value}
-            autoFocus
-            autoComplete="off"
-            autoCapitalize="none"
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && save()}
-          />
-        </label>
-        <button className="btn primary wide tall" style={{ marginTop: 12 }} disabled={!value.trim()} onClick={save}>
+        <h2>{title}</h2>
+        <p>{lead}</p>
+        {fields.map((f, i) => {
+          const id = f.save + ':' + f.key;
+          return (
+            <label className="field ask-field" key={id}>
+              <span>{f.label}</span>
+              <input
+                type={f.type}
+                value={values[id]}
+                autoFocus={i === 0}
+                autoComplete="off"
+                autoCapitalize="none"
+                onChange={(e) => setValues((prev) => ({ ...prev, [id]: e.target.value }))}
+                onKeyDown={(e) => e.key === 'Enter' && save()}
+              />
+              <span className="hint">{f.hint}</span>
+            </label>
+          );
+        })}
+        <button className="btn primary wide tall" style={{ marginTop: 12 }} disabled={!ready} onClick={save}>
           Save
         </button>
         <button className="btn ghost wide tall" onClick={onCancel}>

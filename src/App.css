@@ -1114,6 +1114,16 @@ button.chip { font-size: 14px; color: var(--muted); }
 .ask p { color: var(--muted); font-size: 15px; line-height: 1.45; margin: 8px 0 20px; }
 .ask .btn + .btn { margin-top: 8px; }
 
+/* Two labelled fields, their help lines and two buttons are taller than a phone
+   with the keyboard up, and Save has to stay reachable. */
+.ask { max-height: 88vh; overflow-y: auto; }
+
+/* A handle field carries a line of help under the box, so the label above it
+   has to be the one that reads as the label. */
+.ask-field { margin-bottom: 16px; }
+.ask-field > span:first-child { color: var(--ink); font-weight: 600; }
+.ask-field > .hint { display: block; margin: 6px 0 0; font-size: 13px; font-weight: 400; color: var(--muted); }
+
 @keyframes rise {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }

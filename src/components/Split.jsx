@@ -21,6 +21,7 @@ import {
 import { mintToken, owns, saveToken } from '../lib/owner.js';
 import { acceptsKey } from '../lib/pay.js';
 import { findMe, personKey } from '../lib/trip.js';
+import { findFriendByName, handlesOf, rememberFromPerson, samePerson, searchFriends, touchFriend } from '../lib/friends.js';
 import { buildStatementPdf, deliverPdf, slugify } from '../lib/statement-pdf.js';
 import AmountField, { forceDollars } from './AmountField.jsx';
 import ItemRow, { AssignHeader } from './ItemRow.jsx';
@@ -53,6 +54,42 @@ const SECTIONS = ['sec-a', 'sec-b', 'sec-c', 'sec-d', 'sec-e'];
 // What the bar says when the split is not finished. It is never a dead disabled
 // button: pressing it walks to the section that is waiting and focuses it.
 const NEXT = ['Name the split', 'Add one more person', 'Pick how you are splitting', 'Add the receipt', 'Settle up'];
+
+// Paying the bill is what makes the rest of somebody's handles useful, since
+// now everyone else needs somewhere to send money. Fill them from the roster at
+// that moment rather than publishing them on the chance it happens: there is no
+// login, so every rs_people column is readable by anybody holding the link.
+//
+// findFriendByName returns null both when nobody matches AND when two friends
+// share the name. Both mean "do not guess", and both correctly fill nothing,
+// leaving the pay buttons to ask. Do not "improve" this into picking one.
+//
+// ⛔ A NAME MATCH IS NOT PROOF OF THE SAME PERSON, which is why samePerson has
+// to agree as well. One David Ruiz in the roster and a different David Chen at
+// tonight's table share a name and nothing else. Without the second check,
+// Ruiz's Cash App tag was written onto Chen's rs_people row, which is SHARED:
+// every other guest opens the link and sees a live button paying Ruiz, with no
+// name beside it to catch. Chen never gets paid. Filling a blank was the whole
+// failure, and blank is the normal state for a payer at the moment this runs.
+function markPayer(api, person) {
+  api.setPayer(person);
+  const friend = findFriendByName(person.name);
+  if (!friend || !samePerson(friend, person)) return;
+  for (const key of ['cashapp', 'paypal', 'zelle']) {
+    if (!person[key] && friend[key]) api.savePersonField(person.id, key, friend[key]);
+  }
+}
+
+// What to print on a suggestion chip so two friends with the same name can be
+// told apart at the moment you pick one. The Venmo username first, since that
+// is what most of these carry, then whatever else is filled in. Falls back to
+// the word "saved" only when the roster entry has a name and nothing else.
+function suggestLabel(friend) {
+  const row = handlesOf(friend);
+  const value = row.venmo || row.cashapp || row.paypal || row.zelle || row.phone || row.venmo_link;
+  if (!value) return '';
+  return value.length > 18 ? value.slice(0, 17) + '…' : value;
+}
 
 function goToSection(id) {
   const el = document.getElementById(id);
@@ -518,15 +555,44 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
     }
   }, [mine, receiptId]);
 
+  // Already on this split, so the suggestion list should not offer them again.
+  // Two people with the same name would each get their own share and the payer
+  // lookup, which matches on the name, would then match nobody.
+  const onSplit = (n) => people.some((p) => personKey(p.name) === personKey(n));
+
+  const suggestions = useMemo(() => {
+    const q = name.trim();
+    if (!q) return [];
+    return searchFriends(q)
+      .filter((f) => !onSplit(f.name))
+      .slice(0, 4);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, people]);
+
   function add() {
     const v = name.trim();
     if (!v) return;
     setName('');
-    // Two people with the same name would each get their own share and the
-    // payer lookup, which matches on the name, would then match nobody.
-    if (people.some((p) => personKey(p.name) === personKey(v))) return;
+    if (onSplit(v)) return;
     api.addPeople([v]);
   }
+
+  // Adding a saved friend copies their handles onto this split's row. It is a
+  // copy, not a link: editing the roster later must never rewrite a split that
+  // has already been shared or settled.
+  //
+  // Only the two an ower's row is ever read for. There is no login, so every
+  // rs_people column is readable by anybody holding the split link, and a
+  // friend's Cash App, PayPal and Zelle have no job on a split where they only
+  // owe. Those arrive through payerHandles below if they turn out to have paid.
+  function addFriend(friend) {
+    setName('');
+    if (onSplit(friend.name)) return;
+    touchFriend(friend.id);
+    const { venmo, venmo_link: link, phone } = handlesOf(friend);
+    api.addPeople([friend.name], { ...(venmo && { venmo }), ...(link && { venmo_link: link }), ...(phone && { phone }) });
+  }
+
 
   function drop(person) {
     if (personKey(person.name) === personKey(meName)) setMeRemoved(receiptId, true);
@@ -571,6 +637,27 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
           </button>
         </div>
 
+        {suggestions.length > 0 && (
+          <div className="chips" style={{ marginTop: 8 }}>
+            {suggestions.map((f) => (
+              <button
+                type="button"
+                className="chip"
+                key={f.id}
+                onClick={() => addFriend(f)}
+                aria-label={'Add ' + f.name + ' with their saved payment details'}
+              >
+                <Avatar name={f.name} />
+                <span className="chip-name">{f.name}</span>
+                {/* The handle, not the word "saved". Two friends called David
+                    rendered as two identical chips, and this is the tap that
+                    decides whose Venmo goes on the split. */}
+                {suggestLabel(f) && <span className="tag">{suggestLabel(f)}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
         {people.length > 0 && <p className="tiny" style={{ marginTop: 12 }}>Tap the person who paid the bill.</p>}
         {people.length > 0 && (
           <div className="chips" style={{ marginTop: 8 }}>
@@ -607,7 +694,7 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
                   <Avatar name={p.name} index={p.colorIndex} />
                   <button
                     className="chip-name"
-                    onClick={() => api.setPayer(p)}
+                    onClick={() => markPayer(api, p)}
                     aria-pressed={Boolean(isPayer)}
                     aria-label={(isPayer ? p.name + ' paid the bill' : 'Mark ' + p.name + ' as the one who paid')}
                   >
@@ -1231,7 +1318,7 @@ function SectionSettle({
       <h2 style={{ marginBottom: 10 }}>Who paid the bill?</h2>
       <div className="chips">
         {people.map((p) => (
-          <Chip key={p.id} on={Boolean(payer && p.id === payer.id)} onClick={() => api.setPayer(p)}>
+          <Chip key={p.id} on={Boolean(payer && p.id === payer.id)} onClick={() => markPayer(api, p)}>
             <Avatar name={p.name} index={p.colorIndex} size="sm" />
             {p.name}
           </Chip>
@@ -1339,7 +1426,12 @@ function SectionSettle({
             onSaveField={api.savePersonField}
             // A greyed button only shows in send mode when the payer named no
             // services at all, so there is no accepts map here to correct.
-            onAddHandle={(service, key, value) => payer && api.savePersonField(payer.id, key, value)}
+            onAddHandle={(service, key, value) => {
+              if (!payer) return;
+              api.savePersonField(payer.id, key, value);
+              // Learn it, so the next split with this person starts filled in.
+              rememberFromPerson({ ...payer, [key]: value });
+            }}
             onSettle={api.setSettled}
             onPdf={() => makePdf(viewer.id)}
           />

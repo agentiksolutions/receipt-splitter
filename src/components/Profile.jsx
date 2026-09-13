@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { listFriends, removeFriend, saveFriend } from '../lib/friends.js';
 import {
   archivedIds,
   historyIds,
@@ -10,7 +11,7 @@ import {
 } from '../lib/history.js';
 import { parseHandleCode } from '../lib/pay.js';
 import { decodeQr } from '../lib/photo.js';
-import { toast } from './ui.jsx';
+import { Avatar, confirmSheet, toast } from './ui.jsx';
 
 // Every service that can be turned on, with the field that feeds it. Apple Cash
 // has no handle at all: it is a text either way, so it is a toggle on its own.
@@ -26,6 +27,94 @@ const ROWS = [
 // that is already saved.
 const FIELD = { venmo: 'venmo', cashapp: 'cashapp', paypal: 'paypal', zelle: 'zelle', applecash: null };
 
+// The services a saved friend can have a handle for. Apple Cash is not one:
+// there is no handle to hold, and a friend has not said what they take.
+const FRIEND_ROWS = ROWS.filter(([, , placeholder]) => placeholder);
+
+// Which services a friend has, read off the handles that are filled in. A
+// scanned Venmo code counts, since it opens Venmo at the same person.
+function friendServices(friend) {
+  const filled = { ...friend, venmo: friend.venmo || friend.venmo_link };
+  // The handle goes next to the label on purpose. Two friends both called David
+  // with only a Venmo each rendered as two identical rows, and the only way to
+  // tell them apart was to open both. "Venmo david-ruiz" tells them apart here.
+  return FRIEND_ROWS.filter(([service]) => (filled[FIELD[service]] || '').trim()).map(([service, label]) => {
+    const value = String(filled[FIELD[service]] || '').trim();
+    return value && value.length < 30 ? label + ' ' + value : label;
+  });
+}
+
+/**
+ * One saved friend, over the profile. Its own form and its own Save, so nothing
+ * here can reach the profile draft underneath or the rs_people rows the profile
+ * Save writes to. It writes to this device only.
+ */
+function FriendSheet({ friend, onClose }) {
+  const [form, setForm] = useState(friend);
+  const name = (form.name || '').trim();
+  const title = friend.id ? 'Edit friend' : 'Add a friend';
+  const edit = (patch) => setForm((f) => ({ ...f, ...patch }));
+
+  return (
+    <div className="sheet-wrap open profile-wrap" role="dialog" aria-label={title}>
+      <button className="sheet-veil" tabIndex={-1} aria-label="Close" onClick={() => onClose(false)} />
+      <div className="sheet profile">
+        <h2>{title}</h2>
+        <p className="tiny">
+          Kept on this phone. A split takes a copy, so changes here do not reach a split you have
+          already sent.
+        </p>
+
+        <label className="field" style={{ marginTop: 14 }}>
+          <span>Name</span>
+          <input
+            type="text"
+            value={form.name || ''}
+            placeholder="Casey"
+            autoFocus
+            autoComplete="off"
+            onChange={(e) => edit({ name: e.target.value })}
+          />
+        </label>
+
+        {FRIEND_ROWS.map(([service, label, placeholder]) => (
+          <label className="field" key={service}>
+            <span>{label}</span>
+            <input
+              type="text"
+              value={form[FIELD[service]] || ''}
+              placeholder={placeholder}
+              autoComplete="off"
+              onChange={(e) => edit({ [FIELD[service]]: e.target.value })}
+            />
+          </label>
+        ))}
+
+        <label className="field">
+          <span>Phone</span>
+          <input type="tel" value={form.phone || ''} autoComplete="off" onChange={(e) => edit({ phone: e.target.value })} />
+        </label>
+
+        <div className="two">
+          <button className="btn outline" onClick={() => onClose(false)}>
+            Cancel
+          </button>
+          <button
+            className="btn primary"
+            disabled={!name}
+            onClick={() => {
+              saveFriend({ ...form, name });
+              onClose(true);
+            }}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Your name and how people can pay you. Kept on this device, and copied onto the
  * "me" person of every split so a friend opening the link has somewhere to send
@@ -36,8 +125,21 @@ export default function Profile({ firstRun = false, onClose }) {
   const [spread, setSpread] = useState(true);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(null);
+  const [friends, setFriends] = useState(listFriends);
+  // The friend being edited, or an empty object for a new one. Null is closed.
+  const [editing, setEditing] = useState(null);
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
+
+  async function deleteFriend(friend) {
+    const ok = await confirmSheet({
+      title: `Delete ${friend.name || 'this friend'}?`,
+      line: 'Their handles come off this phone. Splits they are already on do not change.'
+    });
+    if (!ok) return;
+    removeFriend(friend.id);
+    setFriends(listFriends());
+  }
 
   function toggle(service, on) {
     const accepts = { ...draft.accepts, [service]: on };
@@ -227,7 +329,52 @@ export default function Profile({ firstRun = false, onClose }) {
             {busy ? 'Saving' : 'Save'}
           </button>
         </div>
+
+        {!firstRun && (
+          <>
+            <p className="field-label">Friends</p>
+            {/* The card below sets overflow hidden via `card flush`, which in this
+                column flex sheet drops its min-height to zero and crushes the
+                rendered list to 0px. That is what its flexShrink is for. */}
+            {friends.length === 0 ? (
+              <p className="tiny">Nobody saved yet.</p>
+            ) : (
+              <div className="card flush" style={{ flexShrink: 0 }}>
+                <div className="rows">
+                  {friends.map((friend, i) => (
+                    <div className="line" key={friend.id}>
+                      <Avatar name={friend.name} index={i} />
+                      <div className="grow">
+                        <div className="name">{friend.name}</div>
+                        <div className="meta">{friendServices(friend).join(', ') || 'No handles saved'}</div>
+                      </div>
+                      <button className="btn ghost sm" onClick={() => setEditing(friend)}>
+                        Edit
+                      </button>
+                      <button className="btn ghost sm" onClick={() => deleteFriend(friend)}>
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <button className="btn outline wide" onClick={() => setEditing({})}>
+              Add a friend
+            </button>
+          </>
+        )}
       </div>
+
+      {editing && (
+        <FriendSheet
+          friend={editing}
+          onClose={(saved) => {
+            setEditing(null);
+            if (saved) setFriends(listFriends());
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -173,6 +173,7 @@ account, no server-side profile.
 | `rs.archived` | splits hidden from the list on this device |
 | `rs.trips`, `rs.trips.archived` | the same, for trips |
 | `rs.profile` | your name and payment handles |
+| `rs.friends` | saved friends and their handles. The list itself never leaves the device. Adding a friend copies their Venmo and phone onto that split, where they travel with it like any other column |
 | `rs.me` | the same name again, for anything written before the profile existed |
 | `rs.tokens` | the delete token per receipt and trip |
 | `rs.mine` | which person row is you, per split |

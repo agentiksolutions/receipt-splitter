@@ -9,10 +9,12 @@ import {
   archiveTrip,
   archivedTripIds,
   forgetTrip,
+  rememberTrip,
+  tripIds,
   unarchive,
   unarchiveTrip
 } from '../lib/history.js';
-import { deleteHandler, owns, tokenFor } from '../lib/owner.js';
+import { deleteHandler, mintToken, owns, saveToken, tokenFor } from '../lib/owner.js';
 import {
   AvatarStack,
   BRANDS,
@@ -49,25 +51,59 @@ export default function Landing({ onOpen, onMenu, intent }) {
   const [splits, setSplits] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
   const [trips, setTrips] = useState([]);
+  const [naming, setNaming] = useState(false);
+  // How many splits each trip really holds, straight from the server.
+  const [tripCounts, setTripCounts] = useState(() => new Map());
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     const filed = new Set(archivedIds());
     const active = historyIds().filter((id) => !filed.has(id)).slice(0, RECENT_LIMIT);
     const ids = [...active, ...historyIds().filter((id) => filed.has(id))];
-    if (!ids.length) {
+
+    let found = [];
+    if (ids.length) {
+      const { data: receipts, error: e } = await supabase.from('rs_receipts').select('*').in('id', ids);
+      // A failed fetch is not proof the splits are gone, so nothing is forgotten
+      // on this path. Doing it anyway would clear the history on one bad night.
+      if (e) setError(e.message);
+      else {
+        found = receipts || [];
+        // Anything the database no longer has is gone for good, so stop listing it.
+        for (const id of ids) if (!found.some((r) => r.id === id)) forget(id);
+      }
+    }
+
+    // Trips come off this device's own list rather than off the receipts. A trip
+    // started before its first split has nothing pointing at it, and reading the
+    // list off loaded receipts is what made it invisible. The ids carried by
+    // those receipts are merged in so a trip made on somebody else's phone,
+    // opened through their link, still gets its name.
+    const wantTrips = [...new Set([...tripIds(), ...found.map((r) => r.trip_id).filter(Boolean)])];
+    const tripRes = wantTrips.length
+      ? await supabase.from('rs_trips').select('*').in('id', wantTrips)
+      : { data: [] };
+    setTrips(tripRes.data || []);
+
+    // Whether a trip is empty is a fact about the server, not about what this
+    // phone happens to have loaded. History is capped at RECENT_LIMIT and a
+    // trip's splits may have been made on somebody else's phone, so counting
+    // only loaded splits calls a full trip empty. That reached a delete
+    // confirmation reading "It has no splits in it yet", which was false, and
+    // the delete then detached every real split from the trip and left them.
+    const countRes = wantTrips.length
+      ? await supabase.from('rs_receipts').select('id, trip_id').in('trip_id', wantTrips)
+      : { data: [] };
+    const counts = new Map();
+    for (const row of countRes.data || []) {
+      counts.set(row.trip_id, (counts.get(row.trip_id) || 0) + 1);
+    }
+    setTripCounts(counts);
+
+    if (!found.length) {
       setSplits([]);
       return;
     }
-    const { data: receipts, error: e } = await supabase.from('rs_receipts').select('*').in('id', ids);
-    if (e) {
-      setError(e.message);
-      setSplits([]);
-      return;
-    }
-    const found = receipts || [];
-    // Anything the database no longer has is gone for good, so stop listing it.
-    for (const id of ids) if (!found.some((r) => r.id === id)) forget(id);
 
     const liveIds = found.map((r) => r.id);
     const [items, people] = await Promise.all([
@@ -81,12 +117,6 @@ export default function Landing({ onOpen, onMenu, intent }) {
       ? await supabase.from('rs_item_assignments').select('item_id, person_id').in('item_id', itemIds)
       : { data: [] };
     const assignments = asg.data || [];
-
-    const tripIdsOn = [...new Set(found.map((r) => r.trip_id).filter(Boolean))];
-    const tripRes = tripIdsOn.length
-      ? await supabase.from('rs_trips').select('*').in('id', tripIdsOn)
-      : { data: [] };
-    setTrips(tripRes.data || []);
 
     const byId = new Map(found.map((r) => [r.id, r]));
     setSplits(
@@ -151,19 +181,46 @@ export default function Landing({ onOpen, onMenu, intent }) {
     load();
   }
 
+  // A trip is started empty and filled in over a weekend, so it exists before
+  // any split does. Same ownership proof as a split: the hash goes on the row,
+  // the token stays on this phone, and only a phone holding it can delete it.
+  async function startTrip(label) {
+    setNaming(false);
+    const { token, hash } = await mintToken();
+    const { data, error: e } = await supabase
+      .from('rs_trips')
+      .insert({ title: label, start_date: today(), owner_token_hash: hash })
+      .select()
+      .single();
+    if (e || !data) {
+      setError(e ? e.message : 'The trip could not be started.');
+      return;
+    }
+    saveToken(data.id, token);
+    rememberTrip(data.id);
+    onOpen(null, { trip: data.id });
+  }
+
   async function removeTrip(t) {
     // The server decides what goes: it removes the splits carrying this trip's
     // token, takes anyone else's out of the trip, and leaves those alone. The
     // copy only mentions that when it is actually going to happen.
     const mine = t.splits.filter((row) => owns(row.receipt.id));
-    const foreign = t.splits.length - mine.length;
+    // What the trip really holds, not what this phone loaded. Saying "no splits
+    // yet" about a trip that has them made the confirmation a false statement,
+    // and the delete then detached every one of them.
+    const held = Math.max(t.serverCount ?? t.splits.length, t.splits.length);
+    const foreign = Math.max(held - mine.length, 0);
     const yes = await confirmSheet({
       title: 'Delete this trip?',
-      line:
-        `Its ${mine.length} ${mine.length === 1 ? 'split goes' : 'splits go'} too, for everyone who has the links.` +
-        (foreign
-          ? ` ${foreign} made on another phone ${foreign === 1 ? 'is' : 'are'} kept and taken out of the trip.`
-          : ' This cannot be undone.'),
+      line: held
+        ? (mine.length
+            ? `Its ${mine.length} ${mine.length === 1 ? 'split goes' : 'splits go'} too, for everyone who has the links.`
+            : '') +
+          (foreign
+            ? `${mine.length ? ' ' : ''}${foreign} made on another phone ${foreign === 1 ? 'is' : 'are'} kept and taken out of the trip.`
+            : ' This cannot be undone.')
+        : 'It has no splits in it yet. This cannot be undone.',
       confirm: 'Delete trip'
     });
     if (!yes) return;
@@ -207,10 +264,10 @@ export default function Landing({ onOpen, onMenu, intent }) {
     load();
   }
 
-  // The pitch shows only on a device that has never made a split. After that
-  // home is the app itself. historyIds is a synchronous localStorage read, so
-  // this is settled on the first paint and nothing flashes.
-  const hasHistory = historyIds().length > 0;
+  // The pitch shows only on a device that has never made a split or started a
+  // trip. After that home is the app itself. Both are synchronous localStorage
+  // reads, so this is settled on the first paint and nothing flashes.
+  const hasHistory = historyIds().length > 0 || tripIds().length > 0;
   const live = (splits || []).filter((t) => !t.archived);
   const filed = (splits || []).filter((t) => t.archived);
   const tripFiled = new Set(archivedTripIds());
@@ -228,12 +285,31 @@ export default function Landing({ onOpen, onMenu, intent }) {
       if (!grouped.has(trip.id)) grouped.set(trip.id, { trip, splits: [] });
       grouped.get(trip.id).splits.push(row);
     }
-    return { loose, trips: [...grouped.values()] };
+    // Every grouped trip carries the server count too, so a trip holding more
+    // splits than this phone loaded is never described by the short number.
+    return { loose, trips: [...grouped.values()].map((g) => ({ ...g, serverCount: tripCounts.get(g.trip.id) || 0 })) };
   }
 
   const shown = group(live.filter((r) => !r.tripId || !tripFiled.has(r.tripId)));
   const shelved = group(filed);
   const shelvedTrips = group(live.filter((r) => r.tripId && tripFiled.has(r.tripId))).trips;
+
+  // group() only ever returns a trip that some loaded split points at, so a trip
+  // with nothing in it yet comes from the device list instead. Only one with no
+  // split at all: a trip whose splits are archived already shows under Archived,
+  // and listing it as empty as well would put it on the page twice.
+  const carrying = new Set((splits || []).map((r) => r.tripId).filter(Boolean));
+  // serverCount is what the trip really holds. `splits` is only what this phone
+  // loaded, which is capped and misses anything made on another phone, so an
+  // empty `splits` is not an empty trip.
+  const bare =
+    splits === null
+      ? []
+      : trips
+          .filter((t) => !carrying.has(t.id))
+          .map((t) => ({ trip: t, splits: [], serverCount: tripCounts.get(t.id) || 0 }));
+  const liveTrips = [...shown.trips, ...bare.filter((g) => !tripFiled.has(g.trip.id))];
+  const filedTrips = [...shelvedTrips, ...bare.filter((g) => tripFiled.has(g.trip.id))];
 
   const bar = (
     <header className="topbar">
@@ -263,7 +339,7 @@ export default function Landing({ onOpen, onMenu, intent }) {
 
       <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
 
-      {shown.trips.map((t) => (
+      {liveTrips.map((t) => (
         <TripCard
           key={t.trip.id}
           group={t}
@@ -278,18 +354,18 @@ export default function Landing({ onOpen, onMenu, intent }) {
         onOpen={onOpen}
         onArchive={(id) => fileAway(id, true)}
         onDelete={removeSplit}
-        showEmpty={shown.trips.length === 0}
+        showEmpty={liveTrips.length === 0}
       />
 
-      {filed.length + shelvedTrips.length > 0 && (
+      {filed.length + filedTrips.length > 0 && (
         <section id="archived" style={{ marginTop: 22 }}>
           <button className="disclose" onClick={() => setShowArchive((v) => !v)} aria-expanded={showArchive}>
             <IconChevron open={showArchive} />
-            Archived ({filed.length + shelvedTrips.length})
+            Archived ({filed.length + filedTrips.length})
           </button>
           {showArchive && (
             <>
-              {shelvedTrips.map((t) => (
+              {filedTrips.map((t) => (
                 <TripCard
                   key={t.trip.id}
                   group={t}
@@ -303,7 +379,7 @@ export default function Landing({ onOpen, onMenu, intent }) {
                 onOpen={onOpen}
                 onUnarchive={(id) => fileAway(id, false)}
                 onDelete={removeSplit}
-                showEmpty={shelvedTrips.length === 0}
+                showEmpty={filedTrips.length === 0}
               />
             </>
           )}
@@ -311,8 +387,62 @@ export default function Landing({ onOpen, onMenu, intent }) {
       )}
 
       <div className="dock">
-        <button className="btn primary wide tall" onClick={() => onOpen(null, { intent: 'new' })}>
-          New split
+        <div className="two">
+          <button className="btn primary tall" onClick={() => onOpen(null, { intent: 'new' })}>
+            New split
+          </button>
+          <button className="btn outline tall" onClick={() => setNaming(true)}>
+            Start a trip
+          </button>
+        </div>
+      </div>
+
+      {naming && <NameSheet onCancel={() => setNaming(false)} onSave={startTrip} />}
+    </div>
+  );
+}
+
+// Starting a trip needs one thing, so it gets one box. Same sheet the rest of
+// the app uses to ask a single question.
+function NameSheet({ onCancel, onSave }) {
+  const [value, setValue] = useState('');
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  function save() {
+    const v = value.trim();
+    if (v) onSave(v);
+  }
+
+  return (
+    <div className="ask-wrap" role="dialog" aria-modal="true" aria-label="Start a trip">
+      <button className="ask-veil" aria-label="Cancel" onClick={onCancel} />
+      <div className="ask">
+        <h2>Start a trip</h2>
+        <p>A trip holds several splits and works out who owes who at the end. Add splits to it as you go.</p>
+        <label className="field">
+          <span>What to call it</span>
+          <input
+            type="text"
+            value={value}
+            autoFocus
+            autoComplete="off"
+            placeholder="Nashville weekend"
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && save()}
+          />
+        </label>
+        <button className="btn primary wide tall" style={{ marginTop: 12 }} disabled={!value.trim()} onClick={save}>
+          Start trip
+        </button>
+        <button className="btn ghost wide tall" onClick={onCancel}>
+          Cancel
         </button>
       </div>
     </div>
@@ -683,6 +813,9 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
 // Every split in one trip, as a single card on home.
 function TripCard({ group, onOpen, onArchive, onUnarchive, onDelete }) {
   const { trip, splits } = group;
+  // The card counts what the trip holds on the server, not what this phone
+  // loaded, so a trip whose splits were made elsewhere does not read as empty.
+  const held = Math.max(group.serverCount ?? 0, splits.length);
   const totalCents = splits.reduce((sum, r) => sum + shownTotal(r.split).cents, 0);
   const dates = splits.map((r) => r.receipt.event_date).filter(Boolean).sort();
   const span =
@@ -719,7 +852,7 @@ function TripCard({ group, onOpen, onArchive, onUnarchive, onDelete }) {
         <div className="bottom">
           <AvatarStack people={crowd} />
           <span className="paid">
-            {splits.length} {splits.length === 1 ? 'split' : 'splits'}
+            {held ? held + (held === 1 ? ' split' : ' splits') : 'No splits yet'}
           </span>
         </div>
       </div>
