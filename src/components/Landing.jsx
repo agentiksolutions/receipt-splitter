@@ -226,7 +226,7 @@ function Marketing({ onStart }) {
     <div className="market">
       <div className="mk-hero">
         <Mark size={56} tone="light" />
-        <h1>Split the receipt. Everyone pays their part.</h1>
+        <h1>When your math isn't mathing, go halfsies.</h1>
         <p>
           Take a photo of the receipt, tap who had what, and everyone gets their number with tax and tip included.
           Then they pay you with Venmo, Cash App, Zelle or Apple Pay.

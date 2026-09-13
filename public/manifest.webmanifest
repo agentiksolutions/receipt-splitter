@@ -1,7 +1,7 @@
 {
   "name": "Halfsies",
   "short_name": "Halfsies",
-  "description": "Split the receipt. Everyone pays their part.",
+  "description": "When your math isn't mathing, go halfsies.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
