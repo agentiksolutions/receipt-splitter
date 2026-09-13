@@ -1,8 +1,21 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { myName, setMyName } from '../lib/history.js';
 import { Avatar, IconBack, IconPlus } from './ui.jsx';
+import NameCard from './NameCard.jsx';
 
 export default function PeopleStep({ people, payer, api, onNext, onBack, embedded }) {
   const [name, setName] = useState('');
+  const [me, setMe] = useState(myName);
+  const seeded = useRef(false);
+
+  // A split opens with the owner already on it and already marked as the payer.
+  // Only on an empty split, so removing yourself sticks.
+  useEffect(() => {
+    if (seeded.current || !me || people.length > 0) return;
+    seeded.current = true;
+    api.addPeople([me]);
+    api.patchReceipt({ payer_name: me });
+  }, [me, people.length, api]);
 
   function add() {
     const v = name.trim();
@@ -13,6 +26,16 @@ export default function PeopleStep({ people, payer, api, onNext, onBack, embedde
 
   const card = (
     <>
+      {!me && (
+        <NameCard
+          sub="Saved on this device so your splits start with you on them."
+          onSave={(n) => {
+            setMyName(n);
+            setMe(n);
+          }}
+        />
+      )}
+
       <div className="card">
         <div className="inline">
           <input
@@ -41,10 +64,12 @@ export default function PeopleStep({ people, payer, api, onNext, onBack, embedde
               // here. Anyone can still be removed; the picker comes back if the
               // person it pointed at is gone.
               const isPayer = payer && p.id === payer.id;
+              const isMe = Boolean(me) && p.name === me;
               return (
                 <span className={'chip' + (isPayer ? ' payer' : '')} key={p.id}>
                   <Avatar name={p.name} index={p.colorIndex} />
                   {p.name}
+                  {isMe && <span className="tag">you</span>}
                   {isPayer && <span className="tag">paid</span>}
                   <button className="x" onClick={() => api.removePerson(p.id)} aria-label={'Remove ' + p.name}>
                     &times;

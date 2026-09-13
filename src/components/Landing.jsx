@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { splitReceipt, money } from '../lib/money.js';
-import { archive, archivedIds, forget, historyIds, remember, unarchive } from '../lib/history.js';
+import { archive, archivedIds, forget, historyIds, myName, remember, setMyName, unarchive } from '../lib/history.js';
 import { AvatarStack, BRANDS, IconBack, IconCheck, IconChevron, IconMenu, Progress, Wordmark } from './ui.jsx';
 import { Mark } from './Logo.jsx';
+import NameCard from './NameCard.jsx';
 
 // Local calendar date. toISOString would hand back tomorrow after 8pm Eastern.
 export function today() {
@@ -26,6 +27,7 @@ const RECENT_LIMIT = 12;
 export default function Landing({ onOpen, onMenu, intent }) {
   const [splits, setSplits] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
+  const [namingMe, setNamingMe] = useState(false);
   const [naming, setNaming] = useState(false);
   const [title, setTitle] = useState('');
   const [date, setDate] = useState(today);
@@ -102,6 +104,7 @@ export default function Landing({ onOpen, onMenu, intent }) {
 
   useEffect(() => {
     if (intent === 'new') setNaming(true);
+    if (intent === 'name') setNamingMe(true);
     if (intent === 'archived') {
       setShowArchive(true);
       // Waits a frame so the section exists before we scroll to it.
@@ -199,6 +202,18 @@ export default function Landing({ onOpen, onMenu, intent }) {
   const live = (splits || []).filter((t) => !t.archived);
   const filed = (splits || []).filter((t) => t.archived);
 
+  const nameCard = namingMe ? (
+    <NameCard
+      value={myName()}
+      sub="Changing this only affects new splits."
+      onSave={(n) => {
+        setMyName(n);
+        setNamingMe(false);
+      }}
+      onCancel={() => setNamingMe(false)}
+    />
+  ) : null;
+
   const bar = (
     <header className="topbar">
       <Wordmark onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} />
@@ -213,6 +228,7 @@ export default function Landing({ onOpen, onMenu, intent }) {
       <div className="col market-col plain">
         {bar}
         {error && <p className="banner bad">{error}</p>}
+        {nameCard}
         <Marketing onStart={() => setNaming(true)} />
       </div>
     );
@@ -223,6 +239,8 @@ export default function Landing({ onOpen, onMenu, intent }) {
       {bar}
 
       {error && <p className="banner bad">{error}</p>}
+
+      {nameCard}
 
       <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
       <RecentList

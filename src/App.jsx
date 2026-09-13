@@ -86,6 +86,9 @@ export default function App() {
           <button className="sheet-row" onClick={() => go(null, { intent: 'archived' })}>
             Archived
           </button>
+          <button className="sheet-row" onClick={() => go(null, { intent: 'name' })}>
+            Your name
+          </button>
           <button className="sheet-row" onClick={() => go(null, { page: 'how' })}>
             How it works
           </button>

@@ -46,3 +46,23 @@ export function archive(id) {
 export function unarchive(id) {
   writeList(ARCHIVE_KEY, archivedIds().filter((x) => x !== id));
 }
+
+// The owner's own name, so every split can start with them on it. Device only,
+// same as the rest of this file. Renaming it never touches a split already saved.
+const ME_KEY = 'rs.me';
+
+export function myName() {
+  try {
+    return (localStorage.getItem(ME_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function setMyName(name) {
+  try {
+    localStorage.setItem(ME_KEY, String(name || '').trim());
+  } catch {
+    /* private mode: the name is just not kept */
+  }
+}
