@@ -330,7 +330,7 @@ export default function Receipt({ receiptId, startWizard, onExit }) {
   const shareSplit = useCallback(async () => {
     if (navigator.share) {
       try {
-        await navigator.share({ title: receipt?.title || 'Splitly', url: shareUrl });
+        await navigator.share({ title: receipt?.title || 'Halfsies', url: shareUrl });
       } catch {
         /* the sheet was closed */
       }

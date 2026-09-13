@@ -1,4 +1,5 @@
 import React from 'react';
+export { Mark, Wordmark } from './Logo.jsx';
 
 /* Small pieces shared by every screen: avatars, icons, brand marks. */
 
@@ -160,14 +161,5 @@ export function Progress({ step, total = 5 }) {
         <span key={i} className={i < step ? 'on' : ''} />
       ))}
     </div>
-  );
-}
-
-export function Wordmark({ onClick }) {
-  return (
-    <button className="wordmark" onClick={onClick} type="button">
-      <span className="mark" aria-hidden="true">S</span>
-      Splitly
-    </button>
   );
 }

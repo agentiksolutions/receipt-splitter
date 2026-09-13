@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Halfsies">
+  <path d="M17 9a5 5 0 0 1 5-5h14a5 5 0 0 1 5 5v22l-4 2-4-2-4 2-4-2-4 2-4-2z" fill="#1D4ED8"/>
+  <path d="M22 13h14M22 22h8" stroke="#ffffff" stroke-opacity=".7" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <g transform="translate(5 1) rotate(4 29 46)">
+    <path d="M17 35l4 2 4-2 4 2 4-2 4 2 4-2v17a5 5 0 0 1-5 5H22a5 5 0 0 1-5-5z" fill="#3B82F6"/>
+    <path d="M22 43h14M22 50h8" stroke="#ffffff" stroke-opacity=".7" stroke-width="4" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>

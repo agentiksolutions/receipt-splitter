@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { splitReceipt, money } from '../lib/money.js';
 import { historyIds, remember, forget } from '../lib/history.js';
-import { AvatarStack, Progress, Wordmark } from './ui.jsx';
+import { AvatarStack, BRANDS, IconCheck, Progress, Wordmark } from './ui.jsx';
+import { Mark } from './Logo.jsx';
 
 // Local calendar date. toISOString would hand back tomorrow after 8pm Eastern.
 export function today() {
@@ -173,29 +174,172 @@ export default function Landing({ onOpen }) {
     );
   }
 
+  // Nothing on this device means nobody has used the app yet, so the page is
+  // the pitch. Once there is history the list comes first and keeps the dock it
+  // has always had, and the pitch sits underneath it.
+  //
+  // Loading counts as having history on purpose. historyIds is a synchronous
+  // localStorage read, so an empty device is already settled on the first
+  // paint, and a device with splits would otherwise flash the whole marketing
+  // page and then have the list shoved in above it.
+  const showRecent = splits === null || splits.length > 0;
+
   return (
-    <div className="col">
+    <div className={'col market-col' + (showRecent ? '' : ' plain')}>
       <header className="topbar">
         <Wordmark onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} />
       </header>
 
-      <div className="splash">
-        <h1 className="h-xl">Everyone pays for what they ordered.</h1>
-        <p className="sub">
-          Snap the receipt or type it in, tap who had what, and everyone gets their own number with tax and tip
-          already worked in.
-        </p>
-      </div>
-
       {error && <p className="banner bad">{error}</p>}
 
-      <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
-      <RecentList splits={splits} onOpen={onOpen} />
+      {showRecent && (
+        <>
+          <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
+          <RecentList splits={splits} onOpen={onOpen} />
+          <div className="dock">
+            <button className="btn primary wide tall" onClick={() => setNaming(true)}>
+              New split
+            </button>
+          </div>
+        </>
+      )}
 
-      <div className="dock">
-        <button className="btn primary wide tall" onClick={() => setNaming(true)}>
-          New split
+      <Marketing onStart={() => setNaming(true)} />
+    </div>
+  );
+}
+
+const STEPS = [
+  ['Snap the receipt', 'The lines are read off the photo. No receipt? Type them in.'],
+  ['Tap who had what', "Shared plates split evenly. Tax and tip follow each person's share."],
+  ['Send the link', 'Each person sees what they owe and a button to pay you. No app to download.']
+];
+
+const QUESTIONS = [
+  ['Do my friends need the app?', 'No. They open a link on their phone.'],
+  ['Do I need an account?', 'No. Your splits are saved on your phone.'],
+  ['What does it cost?', 'Nothing.']
+];
+
+function Marketing({ onStart }) {
+  return (
+    <div className="market">
+      <div className="mk-hero">
+        <Mark size={56} tone="light" />
+        <h1>Split the receipt. Everyone pays their part.</h1>
+        <p>
+          Take a photo of the receipt, tap who had what, and everyone gets their number with tax and tip included.
+          Then they pay you with Venmo, Cash App, Zelle or Apple Pay.
+        </p>
+        <button className="btn tall" onClick={onStart}>
+          Start a split
         </button>
+      </div>
+
+      <SettleMock />
+
+      <section>
+        <h2>How it works</h2>
+        <div className="mk-steps">
+          {STEPS.map(([title, body], i) => (
+            <div className="mk-step" key={title}>
+              <span className="n" aria-hidden="true">
+                {i + 1}
+              </span>
+              <div>
+                <h3>{title}</h3>
+                <p>{body}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2>Works with</h2>
+        <div className="mk-brands">
+          {BRANDS.map(({ key, label, Mark: BrandMark }) => (
+            <span className="mk-brand" key={key}>
+              <BrandMark />
+              {label}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2>Questions</h2>
+        <dl className="mk-qa">
+          {QUESTIONS.map(([q, a]) => (
+            <div key={q}>
+              <dt>{q}</dt>
+              <dd>{a}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <p className="mk-foot">Halfsies. Made in Lexington, Kentucky.</p>
+    </div>
+  );
+}
+
+/* A still of the settle screen, built from the same classes the real one uses
+   so it cannot drift away from the product. Decorative, so it is hidden from
+   assistive tech rather than described twice. */
+function SettleMock() {
+  const { Mark: VenmoMark } = BRANDS[0];
+  return (
+    <div className="mk-frame" aria-hidden="true">
+      <div className="mk-screen">
+        <div className="hero">
+          <p className="label">Total</p>
+          <p className="amount num">$61.74</p>
+          <div className="facts">
+            <div>
+              Tax
+              <b className="num">$4.32</b>
+            </div>
+            <div>
+              Tip
+              <b className="num">$11.00</b>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="owed">
+            <span className="av" style={{ background: '#2563eb' }}>
+              L
+            </span>
+            <span className="grow">
+              <span className="who-name">Lee</span>
+              <span className="owes">owes Phil</span>
+            </span>
+            <span className="big num">$24.18</span>
+          </div>
+          <div className="pays">
+            <span className="pay v-venmo">
+              <VenmoMark />
+              Venmo
+            </span>
+          </div>
+        </div>
+
+        <div className="card paid" style={{ marginBottom: 0 }}>
+          <div className="owed">
+            <span className="tick">
+              <IconCheck />
+            </span>
+            <span className="grow">
+              <span className="who-name">Sam</span>
+              <span className="owes">Paid by Cash</span>
+            </span>
+            <span className="num" style={{ fontWeight: 600 }}>
+              $18.56
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );
