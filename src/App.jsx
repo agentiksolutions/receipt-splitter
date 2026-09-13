@@ -5,6 +5,7 @@ import Trip from './components/Trip.jsx';
 import Profile from './components/Profile.jsx';
 import { historyIds, profile } from './lib/history.js';
 import { ConfirmHost, IconClose, Toaster } from './components/ui.jsx';
+import TabBar from './components/TabBar.jsx';
 
 // Vercel gives every branch its own permanent address, so the branch name is
 // sitting in the hostname and nothing has to be configured to read it. The bar
@@ -16,7 +17,7 @@ const STAGING = /-git-(?!main-)/.test(
 
 const readRoute = () => {
   const q = new URLSearchParams(window.location.search);
-  return { id: q.get('receipt'), trip: q.get('trip'), page: q.get('page') };
+  return { id: q.get('receipt'), trip: q.get('trip'), page: q.get('page'), tab: q.get('tab') };
 };
 
 export default function App() {
@@ -24,6 +25,11 @@ export default function App() {
   // or which marketing page, plus why we got here.
   const [route, setRoute] = useState(() => ({ ...readRoute(), intent: null, nonce: 0 }));
   const [menu, setMenu] = useState(false);
+  // Which quick button is lit. Home and Trips are the same screen filtered;
+  // Friends and Me both open the profile sheet, focused on the part you asked
+  // for. The sheet is the existing screen for both, so this stays a small
+  // change rather than a second home for the same fields.
+  const [tab, setTab] = useState(() => readRoute().tab || 'home');
   // The very first open asks for a name, once. After that the profile is a menu
   // row. A split never waits on it: with no name you go on as "Me".
   const [showProfile, setShowProfile] = useState(() => !profile().name && historyIds().length === 0);
@@ -53,10 +59,13 @@ export default function App() {
     if (opts.trip) url.searchParams.set('trip', opts.trip);
     else url.searchParams.delete('trip');
     window.history.pushState({}, '', url);
+    if (opts.tab) url.searchParams.set('tab', opts.tab);
+    else url.searchParams.delete('tab');
     setRoute({
       id: id || null,
       trip: opts.trip || null,
       page: opts.page || null,
+      tab: opts.tab || null,
       intent: opts.intent || null,
       // A fresh nonce remounts the home screen, so picking the same menu row
       // twice acts twice instead of going quiet the second time.
@@ -68,9 +77,30 @@ export default function App() {
 
   const openMenu = useCallback(() => setMenu(true), []);
 
+  // Friends and Me are the same sheet with a different landing spot, so they
+  // light their button and open it rather than routing anywhere.
+  const pickTab = useCallback(
+    (next) => {
+      setTab(next);
+      if (next === 'friends' || next === 'me') {
+        firstRun.current = false;
+        setShowProfile(true);
+        return;
+      }
+      setShowProfile(false);
+      go(null, { tab: next === 'home' ? null : next });
+    },
+    [go]
+  );
+
   // A split with no id yet is a split that has not been typed into. It is the
   // same page; the row appears under it on the first keystroke.
   const starting = !route.id && route.intent === 'new';
+
+  // The quick buttons belong on the screens you land on. A split and a trip
+  // both end in their own bar naming the next step, and stacking two bars on a
+  // phone pushes that one off the bottom.
+  const onTopLevel = !route.id && !starting && !route.trip && route.page !== 'how';
 
   let screen;
   if (route.id || starting) {
@@ -108,19 +138,37 @@ export default function App() {
     screen = <HowPage onStart={() => go(null, { intent: 'new' })} onHome={() => go(null)} onMenu={openMenu} />;
   } else {
     screen = (
-      <Landing key={route.intent ? 'i' + route.nonce : 'home'} onOpen={go} onMenu={openMenu} intent={route.intent} />
+      <Landing
+        key={route.intent ? 'i' + route.nonce : 'home' + (route.tab || '')}
+        onOpen={go}
+        onMenu={openMenu}
+        intent={route.intent}
+        only={route.tab === 'trips' ? 'trips' : 'all'}
+      />
     );
   }
 
   return (
-    <div className={'app' + (STAGING ? ' app-staging' : '')}>
+    <div className={'app' + (STAGING ? ' app-staging' : '') + (onTopLevel ? ' app-tabbed' : '')}>
       {STAGING && (
         <div className="staging-bar" role="status">
           Test version. Bills here are not on the real app.
         </div>
       )}
       {screen}
-      {showProfile && <Profile firstRun={firstRun.current} onClose={() => setShowProfile(false)} />}
+      {onTopLevel && (
+        <TabBar tab={tab} onTab={pickTab} onNew={() => go(null, { intent: 'new' })} />
+      )}
+      {showProfile && (
+        <Profile
+          firstRun={firstRun.current}
+          focus={tab === 'friends' ? 'friends' : 'me'}
+          onClose={() => {
+            setShowProfile(false);
+            setTab(route.tab === 'trips' ? 'trips' : 'home');
+          }}
+        />
+      )}
       <Toaster />
       <ConfirmHost />
       <div className={'sheet-wrap' + (menu ? ' open' : '')} aria-hidden={!menu}>
@@ -129,12 +177,6 @@ export default function App() {
           <button className="icon-btn sheet-x" onClick={() => setMenu(false)} aria-label="Close menu">
             <IconClose />
           </button>
-          <button className="sheet-row" onClick={() => go(null, { intent: 'new' })}>
-            New split
-          </button>
-          <button className="sheet-row" onClick={() => go(null)}>
-            My splits
-          </button>
           <button className="sheet-row" onClick={() => go(null, { intent: 'archived' })}>
             Archived
           </button>
@@ -142,6 +184,7 @@ export default function App() {
             className="sheet-row"
             onClick={() => {
               firstRun.current = false;
+              setTab('me');
               setShowProfile(true);
               setMenu(false);
             }}

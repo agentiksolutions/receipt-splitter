@@ -47,7 +47,7 @@ export function prettyDate(iso) {
 
 const RECENT_LIMIT = 12;
 
-export default function Landing({ onOpen, onMenu, intent }) {
+export default function Landing({ onOpen, onMenu, intent, only = 'all' }) {
   const [splits, setSplits] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
   const [trips, setTrips] = useState([]);
@@ -337,7 +337,13 @@ export default function Landing({ onOpen, onMenu, intent }) {
       {error && <p className="banner bad">{error}</p>}
 
 
-      <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
+      <h2 style={{ margin: '8px 0 12px' }}>{only === 'trips' ? 'Trips' : 'Recent splits'}</h2>
+
+      {only === 'trips' && (
+        <button className="btn outline tall" style={{ marginBottom: 14 }} onClick={() => setNaming(true)}>
+          Start a trip
+        </button>
+      )}
 
       {liveTrips.map((t) => (
         <TripCard
@@ -349,13 +355,17 @@ export default function Landing({ onOpen, onMenu, intent }) {
         />
       ))}
 
-      <RecentList
-        splits={splits === null ? null : shown.loose}
-        onOpen={onOpen}
-        onArchive={(id) => fileAway(id, true)}
-        onDelete={removeSplit}
-        showEmpty={liveTrips.length === 0}
-      />
+      {only === 'trips' ? (
+        liveTrips.length === 0 && <EmptyState icon={<IconPlus />} line="No trips yet. Start one and add splits to it." />
+      ) : (
+        <RecentList
+          splits={splits === null ? null : shown.loose}
+          onOpen={onOpen}
+          onArchive={(id) => fileAway(id, true)}
+          onDelete={removeSplit}
+          showEmpty={liveTrips.length === 0}
+        />
+      )}
 
       {filed.length + filedTrips.length > 0 && (
         <section id="archived" style={{ marginTop: 22 }}>
@@ -386,16 +396,6 @@ export default function Landing({ onOpen, onMenu, intent }) {
         </section>
       )}
 
-      <div className="dock">
-        <div className="two">
-          <button className="btn primary tall" onClick={() => onOpen(null, { intent: 'new' })}>
-            New split
-          </button>
-          <button className="btn outline tall" onClick={() => setNaming(true)}>
-            Start a trip
-          </button>
-        </div>
-      </div>
 
       {naming && <NameSheet onCancel={() => setNaming(false)} onSave={startTrip} />}
     </div>

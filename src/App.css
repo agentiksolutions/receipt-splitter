@@ -939,14 +939,14 @@ button.chip { font-size: 14px; color: var(--muted); }
 .sheet {
   position: absolute;
   top: 0;
-  right: 0;
+  left: 0;
   bottom: 0;
   width: min(320px, 86vw);
   padding: 12px 12px 24px;
   background: var(--canvas);
-  border-left: 1px solid var(--line);
-  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.16);
-  transform: translateX(100%);
+  border-right: 1px solid var(--line);
+  box-shadow: 12px 0 32px rgba(15, 23, 42, 0.16);
+  transform: translateX(-100%);
   transition: transform 200ms ease;
   display: flex;
   flex-direction: column;
@@ -1222,3 +1222,64 @@ button.chip { font-size: 14px; color: var(--muted); }
   background: #ffd75e;
   border-bottom: 1px solid #e0b73a;
 }
+
+/* ---------- the quick buttons ------------------------------------------- */
+
+/* Only rendered on the screens you land on. A split and a trip keep .dock,
+   which names their single next step, and two bars would bury it. */
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(var(--col), 100%);
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  align-items: end;
+  padding: 6px 4px calc(4px + var(--safe));
+  background: var(--canvas);
+  border-top: 1px solid var(--line);
+  box-shadow: var(--sh-dock);
+}
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 48px;
+  padding: 5px 0 3px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab.on { color: var(--brand); }
+.tab:active { opacity: 0.6; }
+
+/* Raised out of the row, the way the one action that starts everything should
+   read. The row reserves its column, so nothing sits underneath it. */
+.tab-new {
+  justify-self: center;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin-top: -16px;
+  border: 3px solid var(--canvas);
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.36);
+}
+
+.tab-new:active { transform: scale(0.94); }
+
+/* The last card must clear the bar rather than hide behind it. */
+.app-tabbed .col { padding-bottom: 84px; }

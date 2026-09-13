@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { listFriends, removeFriend, saveFriend } from '../lib/friends.js';
 import {
@@ -120,7 +120,7 @@ function FriendSheet({ friend, onClose }) {
  * "me" person of every split so a friend opening the link has somewhere to send
  * money without anybody being asked to type it again.
  */
-export default function Profile({ firstRun = false, onClose }) {
+export default function Profile({ firstRun = false, focus = 'me', onClose }) {
   const [draft, setDraft] = useState(readProfile);
   const [spread, setSpread] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -128,6 +128,14 @@ export default function Profile({ firstRun = false, onClose }) {
   const [friends, setFriends] = useState(listFriends);
   // The friend being edited, or an empty object for a new one. Null is closed.
   const [editing, setEditing] = useState(null);
+  // The Friends button opens this same sheet, so it has to arrive at the
+  // friends block rather than at the top of a long form.
+  const friendsAt = useRef(null);
+
+  useEffect(() => {
+    if (focus !== 'friends' || !friendsAt.current) return;
+    friendsAt.current.scrollIntoView({ block: 'start' });
+  }, [focus]);
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
 
@@ -238,7 +246,7 @@ export default function Profile({ firstRun = false, onClose }) {
             type="text"
             value={draft.name}
             placeholder="Jordan"
-            autoFocus
+            autoFocus={focus !== 'friends'}
             autoComplete="off"
             onChange={(e) => set({ name: e.target.value })}
           />
@@ -332,7 +340,7 @@ export default function Profile({ firstRun = false, onClose }) {
 
         {!firstRun && (
           <>
-            <p className="field-label">Friends</p>
+            <p className="field-label" ref={friendsAt}>Friends</p>
             {/* The card below sets overflow hidden via `card flush`, which in this
                 column flex sheet drops its min-height to zero and crushes the
                 rendered list to 0px. That is what its flexShrink is for. */}
