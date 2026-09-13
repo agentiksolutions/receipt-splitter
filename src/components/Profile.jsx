@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { listFriends, removeFriend, saveFriend } from '../lib/friends.js';
+import { saveFriend } from '../lib/friends.js';
 import {
   archivedIds,
   historyIds,
@@ -11,16 +11,22 @@ import {
 } from '../lib/history.js';
 import { parseHandleCode } from '../lib/pay.js';
 import { decodeQr } from '../lib/photo.js';
-import { Avatar, confirmSheet, toast } from './ui.jsx';
+import { toast } from './ui.jsx';
 
 // Every service that can be turned on, with the field that feeds it. Apple Cash
 // has no handle at all: it is a text either way, so it is a toggle on its own.
+// The last column is the symbol the service prints in front of a handle.
+// pay.js strips a leading @ or $ before building any link, so typing one is
+// harmless either way. Showing it fixed in the box is about removing the doubt:
+// "@" for Venmo and "$" for Cash App are what people read off a phone screen,
+// and without it nobody knows whether to type it. PayPal takes a plain name in
+// paypal.me/<name>, and Zelle takes a phone or an email, so neither has one.
 const ROWS = [
-  ['venmo', 'Venmo', 'Venmo username', true],
-  ['cashapp', 'Cash App', 'Cash App cashtag', true],
-  ['paypal', 'PayPal', 'PayPal.Me name', true],
-  ['zelle', 'Zelle', 'Zelle phone or email', false],
-  ['applecash', 'Apple Cash', null, false]
+  ['venmo', 'Venmo', 'username', true, '@'],
+  ['cashapp', 'Cash App', 'cashtag', true, '$'],
+  ['paypal', 'PayPal', 'PayPal.Me name', true, ''],
+  ['zelle', 'Zelle', 'phone or email', false, ''],
+  ['applecash', 'Apple Cash', null, false, '']
 ];
 
 // The handle field each toggle reads, so turning one on can default from a value
@@ -33,7 +39,7 @@ const FRIEND_ROWS = ROWS.filter(([, , placeholder]) => placeholder);
 
 // Which services a friend has, read off the handles that are filled in. A
 // scanned Venmo code counts, since it opens Venmo at the same person.
-function friendServices(friend) {
+export function friendServices(friend) {
   const filled = { ...friend, venmo: friend.venmo || friend.venmo_link };
   // The handle goes next to the label on purpose. Two friends both called David
   // with only a Venmo each rendered as two identical rows, and the only way to
@@ -49,7 +55,7 @@ function friendServices(friend) {
  * here can reach the profile draft underneath or the rs_people rows the profile
  * Save writes to. It writes to this device only.
  */
-function FriendSheet({ friend, onClose }) {
+export function FriendSheet({ friend, onClose }) {
   const [form, setForm] = useState(friend);
   const name = (form.name || '').trim();
   const title = friend.id ? 'Edit friend' : 'Add a friend';
@@ -120,34 +126,12 @@ function FriendSheet({ friend, onClose }) {
  * "me" person of every split so a friend opening the link has somewhere to send
  * money without anybody being asked to type it again.
  */
-export default function Profile({ firstRun = false, focus = 'me', onClose }) {
+export default function Profile({ firstRun = false, onClose }) {
   const [draft, setDraft] = useState(readProfile);
   const [spread, setSpread] = useState(true);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(null);
-  const [friends, setFriends] = useState(listFriends);
-  // The friend being edited, or an empty object for a new one. Null is closed.
-  const [editing, setEditing] = useState(null);
-  // The Friends button opens this same sheet, so it has to arrive at the
-  // friends block rather than at the top of a long form.
-  const friendsAt = useRef(null);
-
-  useEffect(() => {
-    if (focus !== 'friends' || !friendsAt.current) return;
-    friendsAt.current.scrollIntoView({ block: 'start' });
-  }, [focus]);
-
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
-
-  async function deleteFriend(friend) {
-    const ok = await confirmSheet({
-      title: `Delete ${friend.name || 'this friend'}?`,
-      line: 'Their handles come off this phone. Splits they are already on do not change.'
-    });
-    if (!ok) return;
-    removeFriend(friend.id);
-    setFriends(listFriends());
-  }
 
   function toggle(service, on) {
     const accepts = { ...draft.accepts, [service]: on };
@@ -252,13 +236,16 @@ export default function Profile({ firstRun = false, focus = 'me', onClose }) {
           />
         </label>
 
-        <p className="tiny">Add these so friends can pay you.</p>
+        <p className="tiny">
+          Tick the ones you take. Photograph the QR code in your Venmo or Cash App
+          and Scan code fills it in, so you do not have to type it.
+        </p>
 
-        {ROWS.map(([service, label, placeholder]) => {
+        {ROWS.map(([service, label, placeholder, , mark]) => {
           const on = Boolean(draft.accepts?.[service]);
           const field = FIELD[service];
           return (
-            <div className="svc" key={service}>
+            <div className={'svc' + (on ? ' on' : '')} key={service}>
               <div className="svc-head">
                 <label className="svc-use">
                   <input type="checkbox" checked={on} onChange={(e) => toggle(service, e.target.checked)} />
@@ -275,19 +262,22 @@ export default function Profile({ firstRun = false, focus = 'me', onClose }) {
                   <span>First choice</span>
                 </label>
               </div>
-              {field && (
+              {field && on && (
                 <div className="inline">
-                  <input
-                    type="text"
-                    value={draft[field] || ''}
-                    placeholder={placeholder}
-                    autoComplete="off"
-                    aria-label={placeholder}
-                    onChange={(e) => setHandle(service, e.target.value)}
-                  />
+                  <div className={'handle-box' + (mark ? ' marked' : '')}>
+                    {mark && <span className="handle-mark">{mark}</span>}
+                    <input
+                      type="text"
+                      value={draft[field] || ''}
+                      placeholder={placeholder}
+                      autoComplete="off"
+                      aria-label={label + ' ' + placeholder}
+                      onChange={(e) => setHandle(service, e.target.value)}
+                    />
+                  </div>
                   {service !== 'zelle' && (
                     <label className="btn outline sm scan-btn">
-                      {scanning === service ? 'Reading' : 'Scan'}
+                      {scanning === service ? 'Reading' : 'Scan code'}
                       <input type="file" accept="image/*" capture="environment" onChange={(e) => onScan(service, e)} />
                     </label>
                   )}
@@ -338,51 +328,8 @@ export default function Profile({ firstRun = false, focus = 'me', onClose }) {
           </button>
         </div>
 
-        {!firstRun && (
-          <>
-            <p className="field-label" ref={friendsAt}>Friends</p>
-            {/* The card below sets overflow hidden via `card flush`, which in this
-                column flex sheet drops its min-height to zero and crushes the
-                rendered list to 0px. That is what its flexShrink is for. */}
-            {friends.length === 0 ? (
-              <p className="tiny">Nobody saved yet.</p>
-            ) : (
-              <div className="card flush" style={{ flexShrink: 0 }}>
-                <div className="rows">
-                  {friends.map((friend, i) => (
-                    <div className="line" key={friend.id}>
-                      <Avatar name={friend.name} index={i} />
-                      <div className="grow">
-                        <div className="name">{friend.name}</div>
-                        <div className="meta">{friendServices(friend).join(', ') || 'No handles saved'}</div>
-                      </div>
-                      <button className="btn ghost sm" onClick={() => setEditing(friend)}>
-                        Edit
-                      </button>
-                      <button className="btn ghost sm" onClick={() => deleteFriend(friend)}>
-                        Delete
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <button className="btn outline wide" onClick={() => setEditing({})}>
-              Add a friend
-            </button>
-          </>
-        )}
       </div>
 
-      {editing && (
-        <FriendSheet
-          friend={editing}
-          onClose={(saved) => {
-            setEditing(null);
-            if (saved) setFriends(listFriends());
-          }}
-        />
-      )}
     </div>
   );
 }

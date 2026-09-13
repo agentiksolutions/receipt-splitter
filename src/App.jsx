@@ -5,6 +5,7 @@ import Trip from './components/Trip.jsx';
 import Profile from './components/Profile.jsx';
 import { historyIds, profile } from './lib/history.js';
 import { ConfirmHost, IconClose, Toaster } from './components/ui.jsx';
+import Friends from './components/Friends.jsx';
 import TabBar from './components/TabBar.jsx';
 
 // Vercel gives every branch its own permanent address, so the branch name is
@@ -77,12 +78,13 @@ export default function App() {
 
   const openMenu = useCallback(() => setMenu(true), []);
 
-  // Friends and Me are the same sheet with a different landing spot, so they
-  // light their button and open it rather than routing anywhere.
+  // Me lights its button and opens the sheet rather than routing anywhere.
   const pickTab = useCallback(
     (next) => {
       setTab(next);
-      if (next === 'friends' || next === 'me') {
+      // Me is your own details, which is a short form best read over the page
+      // you were on. Friends is a list you browse, so it gets a screen.
+      if (next === 'me') {
         firstRun.current = false;
         setShowProfile(true);
         return;
@@ -134,6 +136,8 @@ export default function App() {
         onNewSplit={(tripId) => go(null, { intent: 'new', trip: tripId })}
       />
     );
+  } else if (route.tab === 'friends') {
+    screen = <Friends onMenu={openMenu} />;
   } else if (route.page === 'how') {
     screen = <HowPage onStart={() => go(null, { intent: 'new' })} onHome={() => go(null)} onMenu={openMenu} />;
   } else {
@@ -162,10 +166,9 @@ export default function App() {
       {showProfile && (
         <Profile
           firstRun={firstRun.current}
-          focus={tab === 'friends' ? 'friends' : 'me'}
           onClose={() => {
             setShowProfile(false);
-            setTab(route.tab === 'trips' ? 'trips' : 'home');
+            setTab(route.tab || 'home');
           }}
         />
       )}

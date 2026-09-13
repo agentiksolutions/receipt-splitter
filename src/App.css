@@ -1287,3 +1287,27 @@ button.chip { font-size: 14px; color: var(--muted); }
 
 /* The last card must clear the bar rather than hide behind it. */
 .app-tabbed .col { padding-bottom: 84px; }
+
+/* ---------- handle fields ------------------------------------------------ */
+
+/* The service's own symbol, fixed in the box rather than typed. Venmo prints
+   @name and Cash App prints $tag, and without the symbol on screen nobody
+   knows whether to type it. pay.js strips a leading one anyway, so a pasted
+   "@jordan" still works; this is about the doubt, not the parsing. */
+.handle-box { position: relative; flex: 1; display: flex; }
+.handle-box input { width: 100%; }
+.handle-box.marked input { padding-left: 26px; }
+
+.handle-mark {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* A service you do not take is one line, not a line plus an empty box. */
+.svc.on { padding-bottom: 14px; }
