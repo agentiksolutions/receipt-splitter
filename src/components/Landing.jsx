@@ -131,8 +131,8 @@ export default function Landing({ onOpen }) {
         <div className="step">
           <div className="step-head">
             <p className="step-count">Step 1 of 5</p>
-            <h1>Name it</h1>
-            <p className="sub">A name and a date, so you can find this again later.</p>
+            <h1>What do you want to go halfsies on?</h1>
+            <p className="sub">Give it a name and a date so you can find it later.</p>
           </div>
 
           {error && <p className="banner bad">{error}</p>}
