@@ -26,7 +26,7 @@ import AmountField, { forceDollars } from './AmountField.jsx';
 import ItemRow, { AssignHeader } from './ItemRow.jsx';
 import PersonCard from './PersonCard.jsx';
 import { CATEGORIES, CategoryGlyph } from './categories.jsx';
-import { Avatar, Chip, confirmSheet, EmptyState, IconCamera, IconList, IconPlus, IconType, toast } from './ui.jsx';
+import { Avatar, Chip, confirmSheet, EmptyState, IconCamera, IconList, IconPlus, IconType, toast, IconPencil } from './ui.jsx';
 import { prettyDate, today } from './Landing.jsx';
 
 const SAMPLE = [
@@ -571,8 +571,9 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
           </button>
         </div>
 
+        {people.length > 0 && <p className="tiny" style={{ marginTop: 12 }}>Tap the person who paid the bill.</p>}
         {people.length > 0 && (
-          <div className="chips" style={{ marginTop: 14 }}>
+          <div className="chips" style={{ marginTop: 8 }}>
             {people.map((p) => {
               const isPayer = payer && p.id === payer.id;
               // The row findMe settled on, not another name comparison, so the
@@ -606,16 +607,25 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
                   <Avatar name={p.name} index={p.colorIndex} />
                   <button
                     className="chip-name"
+                    onClick={() => api.setPayer(p)}
+                    aria-pressed={Boolean(isPayer)}
+                    aria-label={(isPayer ? p.name + ' paid the bill' : 'Mark ' + p.name + ' as the one who paid')}
+                  >
+                    {p.name}
+                  </button>
+                  {isMe && personKey(p.name) !== 'me' && <span className="tag">you</span>}
+                  {isPayer && <span className="tag">paid the bill</span>}
+                  <button
+                    type="button"
+                    className="chip-edit"
                     onClick={() => {
                       setDraftName(p.name);
                       setEditing(p.id);
                     }}
                     aria-label={'Rename ' + p.name}
                   >
-                    {p.name}
+                    <IconPencil />
                   </button>
-                  {isMe && personKey(p.name) !== 'me' && <span className="tag">you</span>}
-                  {isPayer && <span className="tag">paid</span>}
                 </Chip>
               );
             })}
@@ -624,7 +634,6 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
       </div>
 
       <p className="tiny">
-        {people.length < 2 ? 'Add one more person.' : 'Tap a name to change it.'}
       </p>
     </Section>
   );
