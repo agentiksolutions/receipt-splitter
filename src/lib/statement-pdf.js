@@ -471,7 +471,6 @@ export function buildTripPdf({
   balances = [],
   moves = [],
   totalCents = 0,
-  meName = '',
   forKey = null,
   shareUrl = ''
 }) {
@@ -479,8 +478,11 @@ export function buildTripPdf({
   doc.setFont('helvetica', 'normal');
   const state = { y: MARGIN };
 
+  // No "You" anywhere in here. This document is built to be handed to somebody
+  // else, and on their screen "You owe Casey $40" names the wrong person. Same
+  // defect the payer line had. The trip screen still says You, because there
+  // the reader is the phone's owner and it is right.
   const key = (name) => String(name || '').trim().toLowerCase();
-  const label = (name) => (meName && key(name) === key(meName) ? 'You' : name);
 
   const dates = rows.map((r) => r.receipt.event_date).filter(Boolean).sort();
   const span =
@@ -500,7 +502,7 @@ export function buildTripPdf({
 
   if (mine) {
     setType(doc, 12, 'bold');
-    text(doc, 'Statement for ' + label(mine.name), MARGIN, state.y);
+    text(doc, 'Statement for ' + mine.name, MARGIN, state.y);
     state.y += 8;
   }
 
@@ -519,7 +521,7 @@ export function buildTripPdf({
     const who = mine
       ? r.split.perPerson.filter((p) => key(p.name) === forKey)
       : r.split.perPerson;
-    const parts = who.map((p) => `${label(p.name)} ${money(p.totalCents)}`);
+    const parts = who.map((p) => `${p.name} ${money(p.totalCents)}`);
     const line = [prettyDate(r.receipt.event_date), r.receipt.category, parts.join(', ')]
       .filter(Boolean)
       .join('  ·  ');
@@ -555,7 +557,7 @@ export function buildTripPdf({
   for (const b of balances) {
     ensure(doc, state, 8);
     setType(doc, 10, 'normal');
-    text(doc, label(b.name), MARGIN, state.y);
+    text(doc, b.name, MARGIN, state.y);
     text(doc, money(b.paidCents), COLS.tax, state.y, { align: 'right' });
     text(doc, money(b.owedCents), COLS.total, state.y, { align: 'right' });
     doc.setFont('helvetica', 'bold');
@@ -578,7 +580,7 @@ export function buildTripPdf({
     for (const m of shown) {
       ensure(doc, state, 8);
       setType(doc, 10, 'normal');
-      text(doc, `${label(m.from)} ${label(m.from) === 'You' ? 'owe' : 'owes'} ${label(m.to)}`, MARGIN, state.y);
+      text(doc, `${m.from} owes ${m.to}`, MARGIN, state.y);
       doc.setFont('helvetica', 'bold');
       text(doc, money(m.cents), RIGHT, state.y, { align: 'right' });
       state.y += 6.5;

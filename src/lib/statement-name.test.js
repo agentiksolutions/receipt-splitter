@@ -1,5 +1,11 @@
 // A statement is read by somebody who is not you, so a name that only means
 // something on the phone that wrote it has to be dropped.
+//
+// selfName has a second caller: needsRealName in Split.jsx, which puts the
+// "what should we call you" field on screen for exactly the names this drops.
+// One list, both ends. Widening it to fix a PDF adds a name the split will now
+// ask about; narrowing it stops asking about a name the PDF still refuses to
+// print. Change the words here and read both.
 //   node src/lib/statement-name.test.js
 
 import assert from 'node:assert/strict';

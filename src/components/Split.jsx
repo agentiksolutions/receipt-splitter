@@ -22,7 +22,7 @@ import { mintToken, owns, saveToken } from '../lib/owner.js';
 import { acceptsKey } from '../lib/pay.js';
 import { findMe, personKey } from '../lib/trip.js';
 import { findFriendByName, handlesOf, rememberFromPerson, samePerson, searchFriends, touchFriend } from '../lib/friends.js';
-import { buildStatementPdf, deliverPdf, slugify } from '../lib/statement-pdf.js';
+import { buildStatementPdf, deliverPdf, selfName, slugify } from '../lib/statement-pdf.js';
 import AmountField, { forceDollars } from './AmountField.jsx';
 import ItemRow, { AssignHeader } from './ItemRow.jsx';
 import PersonCard from './PersonCard.jsx';
@@ -595,9 +595,13 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
   }
 
 
-  // True only while you are on your own split under the placeholder name.
+  // True only while you are on your own split under a name that means nothing
+  // to anybody else. selfName is the same list the PDF strips, deliberately:
+  // when the statement refuses to print a name, this is what asks for one, and
+  // two separate lists would leave "You" or "Self" printing nowhere and being
+  // asked for never.
   const myRow = people.find((p) => personKey(p.name) === personKey(meName));
-  const needsRealName = Boolean(myRow) && personKey(meName) === 'me';
+  const needsRealName = Boolean(myRow) && !selfName(meName);
 
   // The same write the pencil rename does, from a field that says what it is
   // for. It renames the row, moves payer_name with it, and saves the name to
@@ -605,8 +609,13 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
   async function nameMyself() {
     const v = realName.trim();
     if (!v || !myRow) return;
+    // Refusing in silence, having already cleared the field, reads as the Save
+    // button being broken. Keep what was typed and say what happened.
+    if (people.some((p) => p.id !== myRow.id && personKey(p.name) === personKey(v))) {
+      toast(v + ' is already on this split.');
+      return;
+    }
     setRealName('');
-    if (people.some((p) => p.id !== myRow.id && personKey(p.name) === personKey(v))) return;
     const wasPayer = payer && payer.id === myRow.id;
     await api.savePersonField(myRow.id, 'name', v);
     if (wasPayer) api.patchReceipt({ payer_name: v });
@@ -622,7 +631,10 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
     const v = draftName.trim();
     setEditing(null);
     if (!v || v === person.name) return;
-    if (people.some((p) => p.id !== person.id && personKey(p.name) === personKey(v))) return;
+    if (people.some((p) => p.id !== person.id && personKey(p.name) === personKey(v))) {
+      toast(v + ' is already on this split.');
+      return;
+    }
     const wasMe = personKey(person.name) === personKey(meName);
     const wasPayer = payer && payer.id === person.id;
     await api.savePersonField(person.id, 'name', v);

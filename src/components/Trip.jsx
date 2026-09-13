@@ -178,7 +178,6 @@ export default function Trip({ tripId, onExit, onMenu, onOpenSplit, onNewSplit }
       balances: roll.balances,
       moves: roll.moves,
       totalCents: roll.totalCents,
-      meName: me,
       forKey: forKey || null,
       shareUrl: typeof window === 'undefined' ? '' : window.location.href
     });
