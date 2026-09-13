@@ -880,8 +880,8 @@ select {
   font-size: 15px;
   font-weight: 700;
 }
-.swipe-bg.arch { justify-content: flex-end; background: #16a34a; }
-.swipe-bg.del { justify-content: flex-start; background: #dc2626; }
+.swipe-bg.arch { justify-content: flex-start; background: #16a34a; }
+.swipe-bg.del { justify-content: flex-end; background: #dc2626; }
 
 .swipe .recent-card { position: relative; z-index: 1; touch-action: pan-y; }
 .swipe .recent-card.glide { transition: transform 200ms ease; }

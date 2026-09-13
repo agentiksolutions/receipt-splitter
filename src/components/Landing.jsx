@@ -500,8 +500,8 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
       setDx(0);
       return;
     }
-    if (moved < 0) {
-      setLeaving(-1);
+    if (moved > 0) {
+      setLeaving(1);
       setTimeout(file, 200);
       return;
     }
@@ -509,7 +509,7 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
       setDx(0);
       return;
     }
-    setLeaving(1);
+    setLeaving(-1);
   }
 
   const shift = leaving ? leaving * width * 1.05 : dx;
@@ -518,12 +518,12 @@ function SwipeRow({ row, onOpen, onArchive, onUnarchive, onDelete }) {
     <div className="recent-item">
       <div className="swipe" ref={box}>
         {shift !== 0 && (
-          <span className={'swipe-bg ' + (shift > 0 ? 'del' : 'arch')} aria-hidden="true">
+          <span className={'swipe-bg ' + (shift > 0 ? 'arch' : 'del')} aria-hidden="true">
             {armed
-              ? shift > 0
+              ? shift < 0
                 ? 'Release to delete'
                 : 'Release to ' + fileLabel.toLowerCase()
-              : shift > 0
+              : shift < 0
                 ? 'Delete'
                 : fileLabel}
           </span>
