@@ -294,6 +294,22 @@ h3 { font-size: 18px; line-height: 1.3; font-weight: 600; letter-spacing: -0.005
 .field:last-child { margin-bottom: 0; }
 .field > span { display: block; font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 6px; }
 
+/* Tax and tip are one tick line each until ticked. The label is the same
+   13px muted text a plain field carries, so a closed one reads as a field
+   waiting rather than a setting. */
+.amount-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+}
+.amount-toggle input { width: 20px; height: 20px; accent-color: var(--brand); margin: 0; }
+.amount.closed { margin-bottom: 0; }
+
 input[type="text"],
 input[type="date"],
 input[type="email"],
