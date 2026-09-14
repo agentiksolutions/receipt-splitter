@@ -1349,3 +1349,31 @@ button.chip { font-size: 14px; color: var(--muted); }
 .recent-card,
 .sk-row,
 .mk-step { border: 1px solid var(--edge); }
+
+/* ---------- the person pill --------------------------------------------- */
+
+/* Who paid is the one piece of state on this screen, so it is said by the shape
+   of the pill rather than by a word inside it. The generic .chip.on tint is too
+   quiet to carry it, especially in dark mode, and it stays as it is for the
+   mode, category and tip chips, which are choices rather than a fact about a
+   person. */
+.chip.person.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand);
+}
+.chip.person.on .chip-x,
+.chip.person.on .chip-edit { color: var(--on-brand); opacity: 0.7; }
+.chip.person.on .chip-edit:hover { color: var(--on-brand); opacity: 1; }
+
+/* The avatar is a saturated colour on a saturated pill, so it needs an edge to
+   stay a separate object. */
+.chip.person.on .av { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92); }
+
+.chip-tick {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding-left: 2px;
+  color: var(--on-brand);
+}

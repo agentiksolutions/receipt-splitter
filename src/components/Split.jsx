@@ -26,8 +26,7 @@ import { buildStatementPdf, deliverPdf, selfName, slugify } from '../lib/stateme
 import AmountField, { forceDollars } from './AmountField.jsx';
 import ItemRow, { AssignHeader } from './ItemRow.jsx';
 import PersonCard from './PersonCard.jsx';
-import { CATEGORIES, CategoryGlyph } from './categories.jsx';
-import { Avatar, Chip, confirmSheet, EmptyState, IconCamera, IconList, IconPlus, IconType, toast, IconPencil } from './ui.jsx';
+import { Avatar, Chip, confirmSheet, EmptyState, IconCamera, IconCheck, IconList, IconPlus, IconType, toast, IconPencil } from './ui.jsx';
 import { prettyDate, today } from './Landing.jsx';
 
 const SAMPLE = [
@@ -453,19 +452,12 @@ function SectionWho({ receipt, trip, onOpenTrip, api, fresh }) {
           />
         </label>
 
-        <span className="field-label">What kind</span>
-        <div className="chips cats">
-          {CATEGORIES.map(([key, label]) => (
-            <Chip
-              key={key}
-              on={(receipt.category || 'food') === key}
-              onClick={() => api.patchReceipt({ category: key })}
-            >
-              <CategoryGlyph category={key} />
-              {label}
-            </Chip>
-          ))}
-        </div>
+        {/* The category question used to live here, seven chips on the first
+            screen of every split. The answer is read in exactly two places: a
+            small glyph on the trip list and one word in the trip PDF. Nothing
+            filters, totals, sorts or exports by it, and nothing gates on it.
+            The column stays, so the glyph keeps working and a spending view
+            later has its history; the question is what was not worth asking. */}
 
         {mine && (
           <>
@@ -753,18 +745,36 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
                 );
               }
               return (
-                <Chip key={p.id} on={isPayer} onRemove={() => drop(p)} removeLabel={'Remove ' + p.name}>
+                // Nothing but the name goes inside the pill. It used to read
+                // "Philip Fifield  you  paid the bill" across one line, which is
+                // three labels and a name fighting in a 44px pill, and the state
+                // it was announcing was already the thing the pill looks like.
+                // Being the payer is now a filled pill with a tick. The screen
+                // reader still gets the sentence, through aria-label.
+                <Chip
+                  key={p.id}
+                  className="person"
+                  on={isPayer}
+                  onRemove={() => drop(p)}
+                  removeLabel={'Remove ' + p.name}
+                >
                   <Avatar name={p.name} index={p.colorIndex} />
                   <button
                     className="chip-name"
                     onClick={() => markPayer(api, p)}
                     aria-pressed={Boolean(isPayer)}
-                    aria-label={(isPayer ? p.name + ' paid the bill' : 'Mark ' + p.name + ' as the one who paid')}
+                    aria-label={
+                      (isPayer ? p.name + ' paid the bill' : 'Mark ' + p.name + ' as the one who paid') +
+                      (isMe ? '. This is you.' : '')
+                    }
                   >
                     {p.name}
                   </button>
-                  {isMe && personKey(p.name) !== 'me' && <span className="tag">you</span>}
-                  {isPayer && <span className="tag">paid the bill</span>}
+                  {isPayer && (
+                    <span className="chip-tick" aria-hidden="true">
+                      <IconCheck />
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="chip-edit"
@@ -977,7 +987,16 @@ function SectionBill({ receipt, people, items, claimed, split, how, payer, meNam
     const cents = toCents(totalRaw);
     if (cents <= 0) return;
     setBusy(true);
-    await api.addItems([{ name: (receipt.title || '').trim() || 'Bill', price: cents / 100 }]);
+    const made = await api.addItems([{ name: (receipt.title || '').trim() || 'Bill', price: cents / 100 }]);
+    // One lump sum is not an itemised bill, so it goes on everybody the moment
+    // it lands. Without this, entering a total while the split is set to "by
+    // item" leaves one line called "Bill" sitting unassigned, the bar reads
+    // "1 line left to assign" and there is nothing sensible to tap. Somebody
+    // who has no itemised receipt is the exact person who should not be asked
+    // to itemise. Any share can still be changed afterwards on that line.
+    if (made && made.length && people.length) {
+      api.bulkAssign(made.flatMap((it) => people.map((p) => ({ item_id: it.id, person_id: p.id }))));
+    }
     const patch = {};
     if (draftTax) {
       patch.tax_amount = draftTax / 100;
