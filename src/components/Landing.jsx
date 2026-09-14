@@ -320,19 +320,11 @@ export default function Landing({ onOpen, onMenu, intent, only = 'all' }) {
     </header>
   );
 
-  // The marketing page is the answer to an empty Home, not to an empty Trips.
-  // Tapping Trips and being shown the hero again reads as the button doing
-  // nothing.
-  if (!hasHistory && only !== 'trips') {
-    return (
-      <div className="col market-col plain">
-        {bar}
-        {error && <p className="banner bad">{error}</p>}
-          <Marketing onStart={() => onOpen(null, { intent: 'new' })} />
-      </div>
-    );
-  }
-
+  // Home used to be the marketing page until you had your first split: the
+  // hero, the sample bill, the three steps and the questions. That is an about
+  // page, and it lives on one, reachable from the menu and from the line under
+  // the empty list. Home is your splits, empty or not, so the screen does not
+  // change shape underneath you the first time you use it.
   return (
     <div className="col">
       {bar}
@@ -368,6 +360,14 @@ export default function Landing({ onOpen, onMenu, intent, only = 'all' }) {
           onDelete={removeSplit}
           showEmpty={liveTrips.length === 0}
         />
+      )}
+
+      {!hasHistory && (
+        <p className="tiny" style={{ textAlign: 'center', marginTop: 4 }}>
+          <button className="btn ghost sm" onClick={() => onOpen(null, { page: 'how' })}>
+            New here? See how it works
+          </button>
+        </p>
       )}
 
       {filed.length + filedTrips.length > 0 && (
