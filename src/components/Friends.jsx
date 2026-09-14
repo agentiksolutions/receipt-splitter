@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { listFriends, removeFriend } from '../lib/friends.js';
+import { listFriends, removeFriend, saveFriend } from '../lib/friends.js';
+import { canPickContacts, pickContacts } from '../lib/contacts.js';
 import { FriendSheet, friendServices } from './Profile.jsx';
 import { Avatar, confirmSheet, EmptyState, IconMenu, IconPlus, Wordmark } from './ui.jsx';
 
@@ -17,6 +18,19 @@ export default function Friends({ onMenu }) {
   const [friends, setFriends] = useState(listFriends);
   // The friend being edited, or an empty object for a new one. Null is closed.
   const [editing, setEditing] = useState(null);
+
+  // Several friends off the phone's contact sheet at once. Only the name and
+  // the number come across; payment handles are still entered by hand, since
+  // a phone has no field for a Venmo username. Android Chrome only.
+  async function fromContacts() {
+    const picked = await pickContacts();
+    const have = new Set(listFriends().map((f) => f.name.toLowerCase()));
+    for (const c of picked) {
+      if (have.has(c.name.toLowerCase())) continue;
+      saveFriend({ name: c.name, ...(c.phone && { phone: c.phone }) });
+    }
+    if (picked.length) setFriends(listFriends());
+  }
 
   async function drop(friend) {
     const ok = await confirmSheet({
@@ -45,6 +59,11 @@ export default function Friends({ onMenu }) {
       <button className="btn primary wide tall" onClick={() => setEditing({})}>
         Add a friend
       </button>
+      {canPickContacts() && (
+        <button className="btn outline wide" style={{ marginTop: 8 }} onClick={fromContacts}>
+          Pick from contacts
+        </button>
+      )}
 
       {friends.length === 0 ? (
         <EmptyState icon={<IconPlus />} line="Nobody saved yet. Add the people you split with most." />

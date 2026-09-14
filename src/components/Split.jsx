@@ -20,6 +20,7 @@ import { owns } from '../lib/owner.js';
 import { acceptsKey } from '../lib/pay.js';
 import { findMe, personKey } from '../lib/trip.js';
 import { findFriendByName, handlesOf, listFriends, rememberFromPerson, samePerson, searchFriends, touchFriend } from '../lib/friends.js';
+import { canPickContacts, pickContacts } from '../lib/contacts.js';
 import { buildStatementPdf, deliverPdf, selfName, slugify } from '../lib/statement-pdf.js';
 import AmountField, { forceDollars } from './AmountField.jsx';
 import ItemRow, { AssignHeader } from './ItemRow.jsx';
@@ -491,6 +492,18 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, people]);
 
+  // Several people off the phone's own contact sheet in one go. The number
+  // travels with each one, so the request-by-text button works without
+  // anybody typing it. Android Chrome only; canPickContacts hides the button
+  // where the phone offers no way in.
+  async function fromContacts() {
+    const picked = await pickContacts();
+    for (const c of picked) {
+      if (onSplit(c.name)) continue;
+      await api.addPeople([c.name], c.phone ? { phone: c.phone } : null);
+    }
+  }
+
   function add() {
     const v = name.trim();
     if (!v) return;
@@ -588,6 +601,12 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
             <IconPlus />
           </button>
         </div>
+
+        {canPickContacts() && (
+          <button className="btn outline wide" style={{ marginTop: 8 }} onClick={fromContacts}>
+            Pick from contacts
+          </button>
+        )}
 
         {suggestions.length > 0 && (
           <div className="chips" style={{ marginTop: 8 }}>
