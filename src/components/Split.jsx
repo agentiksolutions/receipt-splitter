@@ -221,6 +221,13 @@ export default function Split({
       firstPaint.current = false;
       return;
     }
+    // Never yank the page away from somebody who is mid-sentence. Naming a
+    // split unlocks the next section on the FIRST keystroke, which is right,
+    // and the walk-down that followed scrolled the name field off screen while
+    // the letters were still going in. The walk is for finishing an action, not
+    // for typing one.
+    const busyTyping = document.activeElement;
+    if (busyTyping && (busyTyping.tagName === 'INPUT' || busyTyping.tagName === 'TEXTAREA')) return;
     document.getElementById(SECTIONS[seen - 1])?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [seen]);
 
