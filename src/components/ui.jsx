@@ -4,14 +4,20 @@ export { Mark, Wordmark } from './Logo.jsx';
 /* Small pieces shared by every screen: avatars, icons, brand marks. */
 
 // Eight fixed colors, picked so white initials stay legible on each.
+//
+// None of them may be a color the app uses to mean something. #dc2626 sat here
+// until it was noticed that it is exactly --danger, so a person's avatar was
+// drawn in the same red as the delete swipe and the destructive confirm button.
+// #be123c reads as a person; #0d9488 keeps the same distance from the green
+// that means settled.
 export const PALETTE = [
   '#2563eb',
   '#7c3aed',
   '#db2777',
-  '#dc2626',
+  '#be123c',
   '#ea580c',
   '#a16207',
-  '#059669',
+  '#0d9488',
   '#0891b2'
 ];
 

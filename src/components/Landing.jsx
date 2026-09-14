@@ -332,7 +332,7 @@ export default function Landing({ onOpen, onMenu, intent, only = 'all' }) {
       {error && <p className="banner bad">{error}</p>}
 
 
-      <h2 style={{ margin: '8px 0 12px' }}>{only === 'trips' ? 'Trips' : 'Recent splits'}</h2>
+      <h2 style={{ margin: '14px 0 14px' }}>{only === 'trips' ? 'Trips' : 'Recent splits'}</h2>
 
       {only === 'trips' && (
         <button className="btn outline tall" style={{ marginBottom: 14 }} onClick={() => setNaming(true)}>

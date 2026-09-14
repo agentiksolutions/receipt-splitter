@@ -226,11 +226,15 @@ export default function Profile({ firstRun = false, onClose }) {
 
         <label className="field" style={{ marginTop: 14 }}>
           <span>Your name</span>
+          {/* firstRun, not the leftover `focus` prop that went away when Friends
+              moved to its own screen. `focus` resolved to the global
+              window.focus, so the test was permanently true and every visit from
+              the Me button threw the keyboard over the payment fields. */}
           <input
             type="text"
             value={draft.name}
             placeholder="Jordan"
-            autoFocus={focus !== 'friends'}
+            autoFocus={firstRun}
             autoComplete="off"
             onChange={(e) => set({ name: e.target.value })}
           />

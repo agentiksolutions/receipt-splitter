@@ -37,7 +37,7 @@ export default function Friends({ onMenu }) {
         </button>
       </header>
 
-      <h2 style={{ margin: '8px 0 4px' }}>Friends</h2>
+      <h2 style={{ margin: '14px 0 6px' }}>Friends</h2>
       <p className="tiny" style={{ marginBottom: 14 }}>
         Saved on this phone so you do not retype a Venmo username every time.
       </p>

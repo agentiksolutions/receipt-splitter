@@ -24,9 +24,12 @@
   <meta name="twitter:description" content="Split a receipt with friends. Free." />
   <meta name="twitter:image" content="https://receipt-splitter-seven-chi.vercel.app/og.png" />
 
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <!-- No webfont on purpose. The phone already has one, and the page a friend
+       opens is a cold-cache load off a text message on cellular: three requests
+       to another origin before first paint, then every name and every amount
+       reflowing when the font lands. -apple-system is SF Pro on the target
+       device, Roboto on Android, Segoe UI on Windows, all metrically close and
+       all instant. -->
   <title>Halfsies</title>
 </head>
 <body>
