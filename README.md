@@ -225,4 +225,30 @@ Tables live in the `life-command-center` Supabase project, prefixed `rs_`.
 Storage bucket `receipt-photos`. Edge Function `read-receipt`. Repo
 `agentiksolutions/receipt-splitter`, hosted on Vercel.
 
+## Layout
+
+```
+src/          application code: components/ for the screens, lib/ for the logic and its tests
+public/       static files Vite copies into the build as-is
+supabase/     schema.sql and the read-receipt Edge Function
+docs/         research, audit and QA reports
+```
+
+`src/`, `supabase/` and `docs/` each have a README that says what goes in, what comes out and
+what stays out. `public/` has no README because Vite copies every file in it into the live
+site, so a `README.md` there would be served publicly. Its contract:
+
+- **What goes in:** files served at a fixed URL: the favicon, the app icons, the web app
+  manifest and the `og.png` link preview image.
+- **What comes out:** `vite build` copies them unchanged into `dist/`, which Vercel serves.
+- **What stays out:** anything private, and images the app imports from `src/`.
+
+## What stays at the root and why
+
+- `package.json`, `package-lock.json`, `vite.config.js`, `eslint.config.js` and `index.html`:
+  Vite and ESLint look for them at the root.
+- `.env.example`: lists the two environment variables a local run needs. The real `.env` is
+  gitignored.
+- `CLAUDE.md`: what a Claude session gets wrong in this repo, including the branch rules.
+
 Last updated 2026-09-13.
