@@ -47,7 +47,7 @@ export function prettyDate(iso) {
 
 const RECENT_LIMIT = 12;
 
-export default function Landing({ onOpen, onMenu, intent }) {
+export default function Landing({ onOpen, onMenu, intent, only = 'all' }) {
   const [splits, setSplits] = useState(null);
   const [showArchive, setShowArchive] = useState(false);
   const [trips, setTrips] = useState([]);
@@ -320,16 +320,11 @@ export default function Landing({ onOpen, onMenu, intent }) {
     </header>
   );
 
-  if (!hasHistory) {
-    return (
-      <div className="col market-col plain">
-        {bar}
-        {error && <p className="banner bad">{error}</p>}
-          <Marketing onStart={() => onOpen(null, { intent: 'new' })} />
-      </div>
-    );
-  }
-
+  // Home used to be the marketing page until you had your first split: the
+  // hero, the sample bill, the three steps and the questions. That is an about
+  // page, and it lives on one, reachable from the menu and from the line under
+  // the empty list. Home is your splits, empty or not, so the screen does not
+  // change shape underneath you the first time you use it.
   return (
     <div className="col">
       {bar}
@@ -337,7 +332,13 @@ export default function Landing({ onOpen, onMenu, intent }) {
       {error && <p className="banner bad">{error}</p>}
 
 
-      <h2 style={{ margin: '8px 0 12px' }}>Recent splits</h2>
+      <h2 style={{ margin: '14px 0 14px' }}>{only === 'trips' ? 'Trips' : 'Recent splits'}</h2>
+
+      {only === 'trips' && (
+        <button className="btn outline tall" style={{ marginBottom: 14 }} onClick={() => setNaming(true)}>
+          Start a trip
+        </button>
+      )}
 
       {liveTrips.map((t) => (
         <TripCard
@@ -349,13 +350,25 @@ export default function Landing({ onOpen, onMenu, intent }) {
         />
       ))}
 
-      <RecentList
-        splits={splits === null ? null : shown.loose}
-        onOpen={onOpen}
-        onArchive={(id) => fileAway(id, true)}
-        onDelete={removeSplit}
-        showEmpty={liveTrips.length === 0}
-      />
+      {only === 'trips' ? (
+        liveTrips.length === 0 && <EmptyState icon={<IconPlus />} line="No trips yet. Start one and add splits to it." />
+      ) : (
+        <RecentList
+          splits={splits === null ? null : shown.loose}
+          onOpen={onOpen}
+          onArchive={(id) => fileAway(id, true)}
+          onDelete={removeSplit}
+          showEmpty={liveTrips.length === 0}
+        />
+      )}
+
+      {!hasHistory && (
+        <p className="tiny" style={{ textAlign: 'center', marginTop: 4 }}>
+          <button className="btn ghost sm" onClick={() => onOpen(null, { page: 'how' })}>
+            New here? See how it works
+          </button>
+        </p>
+      )}
 
       {filed.length + filedTrips.length > 0 && (
         <section id="archived" style={{ marginTop: 22 }}>
@@ -386,16 +399,6 @@ export default function Landing({ onOpen, onMenu, intent }) {
         </section>
       )}
 
-      <div className="dock">
-        <div className="two">
-          <button className="btn primary tall" onClick={() => onOpen(null, { intent: 'new' })}>
-            New split
-          </button>
-          <button className="btn outline tall" onClick={() => setNaming(true)}>
-            Start a trip
-          </button>
-        </div>
-      </div>
 
       {naming && <NameSheet onCancel={() => setNaming(false)} onSave={startTrip} />}
     </div>

@@ -10,24 +10,22 @@ import {
   profileHandles,
   saveProfile,
   SERVICES,
-  rememberTrip,
   setMeRemoved,
   setMinePersonId,
   setMyName,
   setViewerId,
-  tripIds,
   viewerId
 } from '../lib/history.js';
-import { mintToken, owns, saveToken } from '../lib/owner.js';
+import { owns } from '../lib/owner.js';
 import { acceptsKey } from '../lib/pay.js';
 import { findMe, personKey } from '../lib/trip.js';
-import { findFriendByName, handlesOf, rememberFromPerson, samePerson, searchFriends, touchFriend } from '../lib/friends.js';
+import { findFriendByName, handlesOf, listFriends, rememberFromPerson, samePerson, searchFriends, touchFriend } from '../lib/friends.js';
+import { canPickContacts, pickContacts } from '../lib/contacts.js';
 import { buildStatementPdf, deliverPdf, selfName, slugify } from '../lib/statement-pdf.js';
 import AmountField, { forceDollars } from './AmountField.jsx';
 import ItemRow, { AssignHeader } from './ItemRow.jsx';
 import PersonCard from './PersonCard.jsx';
-import { CATEGORIES, CategoryGlyph } from './categories.jsx';
-import { Avatar, Chip, confirmSheet, EmptyState, IconCamera, IconList, IconPlus, IconType, toast, IconPencil } from './ui.jsx';
+import { Avatar, Chip, confirmSheet, EmptyState, IconCamera, IconCheck, IconList, IconPlus, IconType, toast, IconPencil } from './ui.jsx';
 import { prettyDate, today } from './Landing.jsx';
 
 const SAMPLE = [
@@ -53,7 +51,7 @@ const SECTIONS = ['sec-a', 'sec-b', 'sec-c', 'sec-d', 'sec-e'];
 
 // What the bar says when the split is not finished. It is never a dead disabled
 // button: pressing it walks to the section that is waiting and focuses it.
-const NEXT = ['Name the split', 'Add one more person', 'Pick how you are splitting', 'Add the receipt', 'Settle up'];
+const NEXT = ['Name the split', 'Add one more person', 'Pick how to split it', 'Add the receipt', 'Settle up'];
 
 // Paying the bill is what makes the rest of somebody's handles useful, since
 // now everyone else needs somewhere to send money. Fill them from the roster at
@@ -184,7 +182,9 @@ export default function Split({
   const [meName, setMe] = useState(() => myName() || 'Me');
   // How the split divides is on the receipt row, so everyone holding the link
   // reads the same answer. 'items' is the column default.
-  const how = receipt.split_mode || 'items';
+  // 'halfsies' was a third mode until it was folded into evenly; rows that
+  // still carry it read as evenly so nothing already shared changes shape.
+  const how = receipt.split_mode === 'halfsies' ? 'evenly' : receipt.split_mode || 'items';
   // Whether anybody has actually chosen. The column is NOT NULL with a default,
   // so a fresh row and a deliberate "by item" look identical; once there are
   // items the question no longer gates anything.
@@ -222,6 +222,13 @@ export default function Split({
       firstPaint.current = false;
       return;
     }
+    // Never yank the page away from somebody who is mid-sentence. Naming a
+    // split unlocks the next section on the FIRST keystroke, which is right,
+    // and the walk-down that followed scrolled the name field off screen while
+    // the letters were still going in. The walk is for finishing an action, not
+    // for typing one.
+    const busyTyping = document.activeElement;
+    if (busyTyping && (busyTyping.tagName === 'INPUT' || busyTyping.tagName === 'TEXTAREA')) return;
     document.getElementById(SECTIONS[seen - 1])?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [seen]);
 
@@ -363,9 +370,6 @@ function SectionWho({ receipt, trip, onOpenTrip, api, fresh }) {
   const [typing, setTyping] = useState(null); // null means "show the row"
   const title = typing ?? (receipt.title || '');
   const edit = useRef(0);
-  const [trips, setTrips] = useState([]);
-  const [newTrip, setNewTrip] = useState('');
-  const [wantTrip, setWantTrip] = useState(receipt.trip_id ? 'has' : '');
   const timer = useRef(null);
 
   // The row is written on the first keystroke, half a second after typing
@@ -384,57 +388,7 @@ function SectionWho({ receipt, trip, onOpenTrip, api, fresh }) {
     }, 500);
   }
 
-  useEffect(() => {
-    // The split's OWN trip has to be in the list even when this device has
-    // never heard of it. Without it the select matched no option, painted
-    // "Not part of a trip", and one tap detached the split for everybody.
-    const want = [...new Set([...tripIds(), receipt.trip_id].filter(Boolean))];
-    if (!want.length) return undefined;
-    let alive = true;
-    supabase
-      .from('rs_trips')
-      .select('*')
-      .in('id', want)
-      .then(({ data }) => {
-        if (alive) setTrips(data || []);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [receipt.trip_id]);
-
-  async function chooseTrip(value) {
-    setWantTrip(value);
-    if (value === 'new') return;
-    await api.patchReceipt({ trip_id: value || null });
-  }
-
-  async function makeTrip() {
-    const label = newTrip.trim();
-    if (!label) return;
-    // Same ownership proof as a receipt: the hash goes on the row, the token
-    // stays here, and only a device holding it can delete the trip.
-    const { token, hash } = await mintToken();
-    const { data } = await supabase
-      .from('rs_trips')
-      .insert({ title: label, start_date: receipt.event_date || today(), owner_token_hash: hash })
-      .select()
-      .single();
-    if (!data) return;
-    saveToken(data.id, token);
-    rememberTrip(data.id);
-    setTrips((prev) => [...prev, data]);
-    setNewTrip('');
-    setWantTrip(data.id);
-    await api.patchReceipt({ trip_id: data.id });
-  }
-
   const from = readLine(receipt);
-  const tripValue = wantTrip === 'new' ? 'new' : receipt.trip_id || '';
-  // A split with no row yet is yours: you are the one making it. Only the owner
-  // gets the control; everyone else reads the trip off the line below, which
-  // already names it and links to the totals.
-  const mine = !receipt.id || owns(receipt.id);
 
   return (
     <Section id="sec-a" fresh={fresh}>
@@ -453,52 +407,18 @@ function SectionWho({ receipt, trip, onOpenTrip, api, fresh }) {
           />
         </label>
 
-        <span className="field-label">What kind</span>
-        <div className="chips cats">
-          {CATEGORIES.map(([key, label]) => (
-            <Chip
-              key={key}
-              on={(receipt.category || 'food') === key}
-              onClick={() => api.patchReceipt({ category: key })}
-            >
-              <CategoryGlyph category={key} />
-              {label}
-            </Chip>
-          ))}
-        </div>
+        {/* The category question used to live here, seven chips on the first
+            screen of every split. The answer is read in exactly two places: a
+            small glyph on the trip list and one word in the trip PDF. Nothing
+            filters, totals, sorts or exports by it, and nothing gates on it.
+            The column stays, so the glyph keeps working and a spending view
+            later has its history; the question is what was not worth asking. */}
 
-        {mine && (
-          <>
-            <label className="field" style={{ marginTop: 12 }}>
-              <span>Part of a trip?</span>
-              <select value={tripValue} onChange={(e) => chooseTrip(e.target.value)}>
-                <option value="">Not part of a trip</option>
-                {trips.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title}
-                  </option>
-                ))}
-                <option value="new">New trip</option>
-              </select>
-            </label>
-
-            {wantTrip === 'new' && (
-              <div className="inline">
-                <input
-                  type="text"
-                  value={newTrip}
-                  placeholder="Nashville weekend"
-                  autoComplete="off"
-                  onChange={(e) => setNewTrip(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && makeTrip()}
-                />
-                <button className="btn soft" onClick={makeTrip} disabled={!newTrip.trim()}>
-                  Add
-                </button>
-              </div>
-            )}
-          </>
-        )}
+        {/* "Part of a trip?" used to be a dropdown here, on the first screen of
+            every split, for a question almost no split has an answer to. It
+            now lives with the trips: open a trip and tap "New split in this
+            trip". A split already in one keeps the "See trip totals" line
+            below. */}
       </div>
 
       {from && <p className="tiny">{from}</p>}
@@ -561,14 +481,28 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
   // lookup, which matches on the name, would then match nobody.
   const onSplit = (n) => people.some((p) => personKey(p.name) === personKey(n));
 
+  // With nothing typed, the people used most recently. Splitting with the
+  // same people is the normal case, and the roster knew them and asked for a
+  // letter anyway.
   const suggestions = useMemo(() => {
     const q = name.trim();
-    if (!q) return [];
-    return searchFriends(q)
+    return (q ? searchFriends(q) : listFriends())
       .filter((f) => !onSplit(f.name))
       .slice(0, 4);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [name, people]);
+
+  // Several people off the phone's own contact sheet in one go. The number
+  // travels with each one, so the request-by-text button works without
+  // anybody typing it. Android Chrome only; canPickContacts hides the button
+  // where the phone offers no way in.
+  async function fromContacts() {
+    const picked = await pickContacts();
+    for (const c of picked) {
+      if (onSplit(c.name)) continue;
+      await api.addPeople([c.name], c.phone ? { phone: c.phone } : null);
+    }
+  }
 
   function add() {
     const v = name.trim();
@@ -668,6 +602,12 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
           </button>
         </div>
 
+        {canPickContacts() && (
+          <button className="btn outline wide" style={{ marginTop: 8 }} onClick={fromContacts}>
+            Pick from contacts
+          </button>
+        )}
+
         {suggestions.length > 0 && (
           <div className="chips" style={{ marginTop: 8 }}>
             {suggestions.map((f) => (
@@ -753,18 +693,36 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
                 );
               }
               return (
-                <Chip key={p.id} on={isPayer} onRemove={() => drop(p)} removeLabel={'Remove ' + p.name}>
+                // Nothing but the name goes inside the pill. It used to read
+                // "Philip Fifield  you  paid the bill" across one line, which is
+                // three labels and a name fighting in a 44px pill, and the state
+                // it was announcing was already the thing the pill looks like.
+                // Being the payer is now a filled pill with a tick. The screen
+                // reader still gets the sentence, through aria-label.
+                <Chip
+                  key={p.id}
+                  className="person"
+                  on={isPayer}
+                  onRemove={() => drop(p)}
+                  removeLabel={'Remove ' + p.name}
+                >
                   <Avatar name={p.name} index={p.colorIndex} />
                   <button
                     className="chip-name"
                     onClick={() => markPayer(api, p)}
                     aria-pressed={Boolean(isPayer)}
-                    aria-label={(isPayer ? p.name + ' paid the bill' : 'Mark ' + p.name + ' as the one who paid')}
+                    aria-label={
+                      (isPayer ? p.name + ' paid the bill' : 'Mark ' + p.name + ' as the one who paid') +
+                      (isMe ? '. This is you.' : '')
+                    }
                   >
                     {p.name}
                   </button>
-                  {isMe && personKey(p.name) !== 'me' && <span className="tag">you</span>}
-                  {isPayer && <span className="tag">paid the bill</span>}
+                  {isPayer && (
+                    <span className="chip-tick" aria-hidden="true">
+                      <IconCheck />
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="chip-edit"
@@ -792,15 +750,18 @@ function SectionPeople({ receiptId, people, payer, meName, onRename, api, fresh 
 /* ---------- C. how are you splitting ---------------------------------- */
 
 function SectionHow({ people, how, picked, onPick, fresh }) {
+  // Two answers to one question. The old three ("Halfsies / Split evenly / By
+  // what each person had") were three unrelated phrases and the first was the
+  // app's own name. Halfsies for two people IS the same as the same for
+  // everybody, so it is the same button and the split_mode stays 'evenly'.
   const modes = [
-    people.length === 2 && ['halfsies', 'Halfsies', 'Straight down the middle'],
-    ['evenly', 'Split evenly', 'Every item split between everyone'],
-    ['items', 'By what each person had', 'Tap the people on each line']
-  ].filter(Boolean);
+    ['evenly', 'Everyone pays the same', 'The bill divided by ' + (people.length || 2)],
+    ['items', 'Everyone pays for what they ordered', 'Tap who had each line']
+  ];
 
   return (
     <Section id="sec-c" fresh={fresh}>
-      <h2>How are you splitting?</h2>
+      <h2>How do you want to split it?</h2>
       <div style={{ marginTop: 10 }}>
         {modes.map(([key, label, sub]) => (
           <button
@@ -977,7 +938,16 @@ function SectionBill({ receipt, people, items, claimed, split, how, payer, meNam
     const cents = toCents(totalRaw);
     if (cents <= 0) return;
     setBusy(true);
-    await api.addItems([{ name: (receipt.title || '').trim() || 'Bill', price: cents / 100 }]);
+    const made = await api.addItems([{ name: (receipt.title || '').trim() || 'Bill', price: cents / 100 }]);
+    // One lump sum is not an itemised bill, so it goes on everybody the moment
+    // it lands. Without this, entering a total while the split is set to "by
+    // item" leaves one line called "Bill" sitting unassigned, the bar reads
+    // "1 line left to assign" and there is nothing sensible to tap. Somebody
+    // who has no itemised receipt is the exact person who should not be asked
+    // to itemise. Any share can still be changed afterwards on that line.
+    if (made && made.length && people.length) {
+      api.bulkAssign(made.flatMap((it) => people.map((p) => ({ item_id: it.id, person_id: p.id }))));
+    }
     const patch = {};
     if (draftTax) {
       patch.tax_amount = draftTax / 100;

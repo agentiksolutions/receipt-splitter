@@ -8,6 +8,55 @@ const ALLOWED_KEYS = new Set(
 );
 const MAX_BYTES = 6 * 1024 * 1024; // base64 payload cap
 
+// Every accepted call spends money on a metered Anthropic request, and the only
+// credential in front of this function is the publishable key that ships inside
+// the public bundle. Anyone who opens the site can read it out in a minute, so
+// the key is not a control and never was. These two ceilings are the control.
+//
+// Both are deliberately generous against real use (a meal is a handful of
+// photos) and ruthless against a script. The global one is the one that matters:
+// a per-IP limit alone is defeated by rotating addresses.
+const PER_IP_HOURLY = 20;
+const GLOBAL_DAILY = 250;
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+// The address is a bare identifier, not something to keep, so only its digest
+// is stored. It is enough to count against and useless to anybody reading rows.
+async function hashIp(ip: string) {
+  const bytes = new TextEncoder().encode("rs:" + ip);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function countSince(filter: string) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rs_reads?select=id&${filter}`, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, Prefer: "count=exact" },
+  });
+  if (!res.ok) {
+    // Length only, never the key itself.
+    console.error("count failed", res.status, (await res.text()).slice(0, 200), "keylen", SERVICE_KEY.length, "url", SUPABASE_URL);
+    return null;
+  }
+  const range = res.headers.get("content-range") ?? "";
+  const total = Number(range.split("/")[1]);
+  return Number.isFinite(total) ? total : null;
+}
+
+async function noteRead(ipHash: string) {
+  await fetch(`${SUPABASE_URL}/rest/v1/rs_reads`, {
+    method: "POST",
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({ ip_hash: ipHash }),
+  });
+}
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -50,6 +99,32 @@ Deno.serve(async (req: Request) => {
 
   const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!anthropicKey) return json({ error: "reader not configured" }, 500);
+
+  // Counted before the image is even parsed, so a refused caller costs nothing
+  // beyond two cheap queries. If the counter itself is unreachable the call is
+  // refused rather than waved through: an unmetered reader is the thing being
+  // prevented, and failing open would restore exactly the hole this closes.
+  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
+  const ipHash = await hashIp(ip);
+  const hourAgo = new Date(Date.now() - 3600_000).toISOString();
+  const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
+
+  const [mine, everyone] = await Promise.all([
+    countSince(`ip_hash=eq.${ipHash}&at=gte.${hourAgo}`),
+    countSince(`at=gte.${dayAgo}`),
+  ]);
+  if (mine === null || everyone === null) {
+    console.error("rate counter unavailable, refusing");
+    return json({ error: "reader unavailable, try again shortly" }, 503);
+  }
+  if (mine >= PER_IP_HOURLY) {
+    return json({ error: "too many receipts read from here in the last hour" }, 429);
+  }
+  if (everyone >= GLOBAL_DAILY) {
+    console.error("global daily reader cap hit");
+    return json({ error: "the reader is at its limit for today" }, 429);
+  }
+  await noteRead(ipHash);
 
   let image = "";
   let mediaType = "image/jpeg";

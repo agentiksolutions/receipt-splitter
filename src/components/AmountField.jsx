@@ -68,6 +68,27 @@ export default function AmountField({
     if (readUnit(unitKey) === '%') return pctFromCents(cents, baseCents);
     return cents ? fromCents(cents) : '';
   });
+  // One tick line until there is something to type. Opens on its own when an
+  // amount already exists, from a photo read or another phone, so stored money
+  // is never hidden behind an unticked box.
+  const [open, setOpen] = useState(cents > 0);
+  const inputRef = useRef(null);
+  useEffect(() => {
+    if (cents > 0) setOpen(true);
+  }, [cents]);
+
+  function toggle(on) {
+    setOpen(on);
+    if (on) {
+      setTimeout(() => inputRef.current?.focus(), 0);
+      return;
+    }
+    // Unticking means "there is none". Clear it in the row too, or the split
+    // keeps charging a tip nobody can see.
+    setRaw('');
+    onChange?.(0);
+    onCommit?.(0);
+  }
 
   // A percent of nothing is nothing. With no items yet there is no subtotal to
   // take a percent of, so the field holds the number and saves nothing until
@@ -128,10 +149,15 @@ export default function AmountField({
   }
 
   return (
-    <div className="field amount">
-      <span>{label}</span>
+    <div className={'field amount' + (open ? '' : ' closed')}>
+      <label className="amount-toggle">
+        <input type="checkbox" checked={open} onChange={(e) => toggle(e.target.checked)} />
+        <span>{label}</span>
+      </label>
+      {open && (
       <div className="amount-row">
         <input
+          ref={inputRef}
           type="text"
           inputMode="decimal"
           className="num"
@@ -155,7 +181,8 @@ export default function AmountField({
           </button>
         </div>
       </div>
-      {unit === '%' && (
+      )}
+      {open && unit === '%' && (
         <div className="result num">{canConvert ? '= ' + money(resultCents) : 'Add items first'}</div>
       )}
     </div>
